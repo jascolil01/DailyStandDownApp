@@ -1,0 +1,12 @@
+{
+  "name": "Daily Stand-Down",
+  "short_name": "Stand-Down",
+  "description": "Hand your day over to tomorrow-you.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f5f3ee",
+  "theme_color": "#1d2a44",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
