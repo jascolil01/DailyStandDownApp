@@ -34,10 +34,9 @@ GitHub Pages on a free account needs the repository to be public. That publishes
 2. Open **SQL Editor**, paste the contents of [`supabase/schema.sql`](supabase/schema.sql), and run it.
 3. From the project's **Connect** / API settings, copy the **Project URL** and the **publishable (anon) key**.
 4. Either paste them into the app under **Settings → Sync and sharing**, or put them in [`config.js`](config.js) and commit it so every device is connected automatically. Both values are designed to be public; the rules in `schema.sql` are what protect your data.
-5. In the app, choose **Create account**, confirm the email Supabase sends, then **Sign in**. Entries already on the device are uploaded.
-6. Choose **Create read-only link** and send the link to your other devices or to other people.
-
-Recommended afterwards: in Supabase, **Authentication → Sign In / Providers**, turn off "Allow new users to sign up" so nobody else can create an account in your project. (Other accounts could never see your entries anyway.)
+5. In Supabase, go to **Authentication → Users → Add user → Create new user**, enter your email and a password, and tick **Auto Confirm User**. The app has no sign-up button, so this is the only way to make an account.
+6. In the app, **Sign in** with that email and password. Entries already on the device are uploaded.
+7. Choose **Create read-only link** and send the link to your other devices or to other people.
 
 ### How read-only works
 

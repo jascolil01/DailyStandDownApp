@@ -573,7 +573,6 @@
         <label class="field"><span>Password</span><input type="password" id="auth-pass" autocomplete="current-password" data-enter="sign-in"></label>
         <div class="row">
           <button class="btn primary" data-action="sign-in">Sign in</button>
-          <button class="btn" data-action="sign-up">Create account</button>
           ${cfg.source === 'saved' ? '<button class="btn link" data-action="cfg-clear">Disconnect project</button>' : ''}
         </div>
       </section>`;
@@ -663,7 +662,7 @@
 
   function setMessage(msg) { state.cloud.message = msg; render(); }
 
-  async function auth(mode) {
+  async function auth() {
     const email = document.getElementById('auth-email').value.trim();
     const password = document.getElementById('auth-pass').value;
     if (!email || !password) return setMessage('Enter your email and password.');
@@ -671,11 +670,8 @@
       try { await connect(); } catch (e) { return setMessage(e.message); }
     }
     const { client } = state.cloud;
-    const res = mode === 'up'
-      ? await client.auth.signUp({ email, password })
-      : await client.auth.signInWithPassword({ email, password });
+    const res = await client.auth.signInWithPassword({ email, password });
     if (res.error) return setMessage(res.error.message);
-    if (!res.data.session) return setMessage('Account created. Open the confirmation email, then come back and sign in.');
     state.cloud.user = res.data.session.user;
     state.cloud.message = '';
     state.tab = 'today';
@@ -820,8 +816,7 @@
       setStatus('local');
       setMessage('Project disconnected. Your entries are still on this device.');
     },
-    'sign-in'() { auth('in'); },
-    'sign-up'() { auth('up'); },
+    'sign-in'() { auth(); },
     async 'sign-out'() {
       if (state.dirty.size) await flush();
       if (state.dirty.size && !confirm('Some changes have not synced yet and will be lost if you sign out now. Sign out anyway?')) return;
