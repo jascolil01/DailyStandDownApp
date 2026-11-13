@@ -22,7 +22,7 @@
     focus: null,
     notice: '',
     renderedDay: null,
-    cloud: { client: null, user: null, status: 'local', error: '', share: undefined, message: '' },
+    cloud: { client: null, user: null, ready: false, status: 'local', error: '', share: undefined, message: '' },
   };
 
   // ---------- small helpers ----------
@@ -89,8 +89,14 @@
     }
   }
 
+  // Once the app is connected to a Supabase project, nothing can be read or
+  // written on this device without signing in.
+  function locked() {
+    return !READONLY && !!getConfig() && !state.cloud.user;
+  }
+
   function saveEntry(entry) {
-    if (READONLY) return;
+    if (READONLY || locked()) return;
     entry.updatedAt = Date.now();
     state.entries[entry.date] = entry;
     state.dirty.add(entry.date);
@@ -145,9 +151,11 @@
       if (READONLY) { await loadShared(); return; }
       const { data } = await client.auth.getSession();
       state.cloud.user = data.session ? data.session.user : null;
-      if (state.cloud.user) await pullAll();
+      state.cloud.ready = true;
       render();
+      if (state.cloud.user) { await pullAll(); render(); }
     } catch (e) {
+      state.cloud.ready = true;
       setStatus('error', e.message);
       render();
     }
@@ -245,7 +253,8 @@
     if (READONLY) {
       label = c.status === 'syncing' ? 'Loading…' : c.status === 'error' ? 'Could not load' : 'Read-only';
       cls = c.status === 'error' ? 'error' : 'readonly';
-    } else if (c.status === 'error') { label = 'Sync problem'; cls = 'error'; }
+    } else if (locked()) { label = 'Signed out'; }
+    else if (c.status === 'error') { label = 'Sync problem'; cls = 'error'; }
     else if (c.status === 'offline') { label = 'Offline — will sync later'; cls = 'error'; }
     else if (c.user && c.status === 'syncing') { label = 'Syncing…'; cls = 'syncing'; }
     else if (c.user) { label = 'Synced'; cls = 'synced'; }
@@ -253,8 +262,8 @@
   }
 
   function headerHtml() {
-    const tabs = READONLY
-      ? [['latest', 'Latest'], ['history', 'History']]
+    const tabs = locked() ? []
+      : READONLY ? [['latest', 'Latest'], ['history', 'History']]
       : [['today', 'Today'], ['history', 'History'], ['settings', 'Settings']];
     return `
       <header class="top">
@@ -550,6 +559,26 @@
       <button class="btn" data-action="reload">Refresh</button>`;
   }
 
+  function gateHtml() {
+    const cfg = getConfig();
+    const c = state.cloud;
+    if (!c.ready) return '<p class="muted pad">Loading…</p>';
+    return `
+      <div class="hero"><h2>Sign in to continue</h2></div>
+      <section class="card">
+        <p>Your stand-downs are tied to your account, so you need to sign in before you can read or write them here.</p>
+        ${c.message ? `<p class="msg" role="status">${esc(c.message)}</p>` : ''}
+        ${c.status === 'error' && c.error ? `<p class="msg err" role="alert">${esc(c.error)}</p>` : ''}
+        <label class="field"><span>Email</span><input type="email" id="auth-email" autocomplete="username"></label>
+        <label class="field"><span>Password</span><input type="password" id="auth-pass" autocomplete="current-password" data-enter="sign-in"></label>
+        <div class="row">
+          <button class="btn primary" data-action="sign-in">Sign in</button>
+          <button class="btn" data-action="sign-up">Create account</button>
+          ${cfg.source === 'saved' ? '<button class="btn link" data-action="cfg-clear">Disconnect project</button>' : ''}
+        </div>
+      </section>`;
+  }
+
   function settingsHtml() {
     const cfg = getConfig();
     const c = state.cloud;
@@ -563,16 +592,6 @@
         <label class="field"><span>Supabase publishable (anon) key</span>
           <input type="text" id="cfg-key" autocomplete="off" spellcheck="false"></label>
         <button class="btn primary" data-action="cfg-save">Connect</button>`;
-    } else if (!c.user) {
-      sync = `
-        <p>Connected to <code>${esc(cfg.url)}</code>. Sign in on the device you write from.</p>
-        <label class="field"><span>Email</span><input type="email" id="auth-email" autocomplete="username"></label>
-        <label class="field"><span>Password</span><input type="password" id="auth-pass" autocomplete="current-password" data-enter="sign-in"></label>
-        <div class="row">
-          <button class="btn primary" data-action="sign-in">Sign in</button>
-          <button class="btn" data-action="sign-up">Create account</button>
-          ${cfg.source === 'saved' ? '<button class="btn link" data-action="cfg-clear">Disconnect project</button>' : ''}
-        </div>`;
     } else {
       const share = c.share === undefined ? '<p class="muted">Checking…</p>'
         : c.share ? `
@@ -611,7 +630,8 @@
 
   function render() {
     state.renderedDay = todayKey();
-    const body = state.tab === 'today' ? todayHtml()
+    const body = locked() ? gateHtml()
+      : state.tab === 'today' ? todayHtml()
       : state.tab === 'latest' ? latestHtml()
       : state.tab === 'history' ? historyHtml()
       : settingsHtml();
@@ -658,6 +678,8 @@
     if (!res.data.session) return setMessage('Account created. Open the confirmation email, then come back and sign in.');
     state.cloud.user = res.data.session.user;
     state.cloud.message = '';
+    state.tab = 'today';
+    render();
     await pullAll();
     render();
   }
@@ -788,21 +810,27 @@
       if (!/^https:\/\/.+/.test(url) || !key) return setMessage('Enter both the project URL (starting with https://) and the key.');
       localStorage.setItem(LS.config, JSON.stringify({ url, key }));
       state.cloud.message = '';
-      initCloud().then(render);
+      state.cloud.ready = false;
+      render();
+      initCloud();
     },
     'cfg-clear'() {
       localStorage.removeItem(LS.config);
-      state.cloud.client = null;
+      state.cloud.client = null; state.cloud.ready = false;
       setStatus('local');
       setMessage('Project disconnected. Your entries are still on this device.');
     },
     'sign-in'() { auth('in'); },
     'sign-up'() { auth('up'); },
     async 'sign-out'() {
+      if (state.dirty.size) await flush();
+      if (state.dirty.size && !confirm('Some changes have not synced yet and will be lost if you sign out now. Sign out anyway?')) return;
       await state.cloud.client.auth.signOut();
       state.cloud.user = null; state.cloud.share = undefined;
+      state.entries = {}; state.dirty = new Set(); state.checkin = null;
+      persistLocal();
       setStatus('local');
-      setMessage('Signed out. Your entries are still on this device.');
+      setMessage('Signed out.');
     },
     'share-new'() { shareAction('new'); },
     'share-off'() { shareAction('off'); },

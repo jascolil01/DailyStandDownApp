@@ -18,7 +18,7 @@ It is plain HTML, CSS and JavaScript with no build step. Serve the folder with a
 npx serve .
 ```
 
-Without any setup, entries are saved in the browser you use. Settings → Backup downloads or restores everything as a file.
+Without a Supabase project configured, entries are saved in the browser you use. Once `config.js` points at a project, the app asks you to sign in before anything can be read or written. Settings → Backup downloads or restores everything as a file.
 
 ## Put it online (GitHub Pages)
 
