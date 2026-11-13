@@ -5,6 +5,6 @@
 //
 // Leave them empty to enter them in the app's Settings screen instead.
 window.DSD_CONFIG = {
-  supabaseUrl: '',
-  supabaseAnonKey: '',
+  supabaseUrl: 'https://gkojymqwaatyvztapyzb.supabase.co',
+  supabaseAnonKey: 'sb_publishable_DRUOwPdlTXBuEyXQhs4YZg_Z2zS91cW',
 };
