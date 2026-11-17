@@ -149,6 +149,8 @@ textarea { resize: vertical; }
 .mood-pill, .mood-dot { font-size: 0.82rem; font-weight: 600; border-radius: 99px; padding: 3px 10px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
 .mood-dot { padding: 3px 9px; }
 
+.notice-card { border-color: var(--accent); background: var(--accent-soft); }
+
 .msg { background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; font-size: 0.92rem; }
 .msg.err { color: var(--danger); }
 code { font-size: 0.88em; background: var(--bg); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }

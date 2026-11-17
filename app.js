@@ -22,7 +22,7 @@
     focus: null,
     notice: '',
     renderedDay: null,
-    cloud: { client: null, user: null, ready: false, status: 'local', error: '', share: undefined, message: '' },
+    cloud: { client: null, user: null, ready: false, pulled: false, status: 'local', error: '', share: undefined, message: '' },
   };
 
   // ---------- small helpers ----------
@@ -60,7 +60,7 @@
   function blankEntry(date) {
     return {
       date, tasks: [], checkedInAt: null,
-      done: '', blockers: '', notes: '', mood: null, nextTasks: [],
+      done: '', blockers: '', notes: '', mood: null, nextTasks: [], skippedPlanned: [],
       closedAt: null, updatedAt: 0,
     };
   }
@@ -153,7 +153,7 @@
       state.cloud.user = data.session ? data.session.user : null;
       state.cloud.ready = true;
       render();
-      if (state.cloud.user) { await pullAll(); render(); }
+      if (state.cloud.user) await syncFromCloud();
     } catch (e) {
       state.cloud.ready = true;
       setStatus('error', e.message);
@@ -165,11 +165,13 @@
     const { client } = state.cloud;
     setStatus('syncing');
     const { data, error } = await client.from('entries').select('day,data').order('day').limit(10000);
-    if (error) { setStatus('error', error.message); return; }
+    if (error) { setStatus('error', error.message); return false; }
     const remoteDays = new Set();
+    let changed = false;
     for (const row of data) {
       remoteDays.add(row.day);
       const local = state.entries[row.day];
+      if (!local || (row.data.updatedAt || 0) > (local.updatedAt || 0)) changed = true;
       if (!local || (row.data.updatedAt || 0) >= (local.updatedAt || 0)) {
         state.entries[row.day] = { ...blankEntry(row.day), ...row.data, date: row.day };
         state.dirty.delete(row.day);
@@ -181,6 +183,33 @@
     persistLocal();
     await flush();
     loadShare();
+    return changed;
+  }
+
+  // Download the latest entries. Today's screen waits for this (up to 8
+  // seconds) so the morning check-in is never built from out-of-date data.
+  async function syncFromCloud() {
+    const first = !state.cloud.pulled;
+    const timer = setTimeout(() => {
+      if (!state.cloud.pulled) { state.cloud.pulled = true; render(); }
+    }, 8000);
+    let changed = true;
+    try {
+      changed = await pullAll();
+    } catch (e) {
+      setStatus(navigator.onLine === false ? 'offline' : 'error', e.message);
+    }
+    clearTimeout(timer);
+    const wasWaiting = !state.cloud.pulled;
+    state.cloud.pulled = true;
+    if (changed || first || wasWaiting) render();
+  }
+
+  // Upload straight away instead of waiting for typing to pause.
+  function flushNow() {
+    if (!state.cloud.user || !state.dirty.size) return;
+    clearTimeout(flushTimer);
+    flush();
   }
 
   let flushTimer = null;
@@ -356,17 +385,30 @@
     return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
   }
 
-  function buildCheckin(today, prev) {
-    return {
-      date: today,
-      planned: prev ? prev.nextTasks.map((t) => ({ text: t.text })) : [],
-      carry: prev ? prev.tasks.filter((t) => !t.done).map((t) => ({ text: t.text, on: true })) : [],
-    };
+  const norm = (text) => String(text || '').trim().toLowerCase();
+
+  // The check-in only remembers what you changed (tasks added, removed or
+  // unticked). The lists themselves are rebuilt from the latest copy of the
+  // previous day every time, so entries that arrive late still show up.
+  function checkinLists(today, prev) {
+    if (!state.checkin || state.checkin.date !== today) {
+      state.checkin = { date: today, extra: [], removed: [], carryOff: [] };
+    }
+    const c = state.checkin;
+    const planned = [
+      ...(prev ? prev.nextTasks.map((t, i) => ({ key: `p:${t.id || i}`, text: t.text })) : [])
+        .filter((t) => !c.removed.includes(t.key)),
+      ...c.extra.map((text, i) => ({ key: `x:${i}`, text })),
+    ];
+    const removedText = prev ? prev.nextTasks
+      .filter((t, i) => c.removed.includes(`p:${t.id || i}`)).map((t) => t.text) : [];
+    const carry = prev ? prev.tasks.filter((t) => !t.done)
+      .map((t, i) => ({ key: t.id || `c:${i}`, text: t.text, on: !c.carryOff.includes(t.id || `c:${i}`) })) : [];
+    return { planned, carry, removedText };
   }
 
   function checkinHtml(today, prev) {
-    if (!state.checkin || state.checkin.date !== today) state.checkin = buildCheckin(today, prev);
-    const c = state.checkin;
+    const c = checkinLists(today, prev);
     return `
       <div class="hero">
         <p class="eyebrow">${esc(fmtDate(today))}</p>
@@ -384,9 +426,9 @@
       </section>`}
       <section class="card">
         <h3>Your tasks for today</h3>
-        ${c.planned.length ? `<ul class="tasks">${c.planned.map((t, i) => `
+        ${c.planned.length ? `<ul class="tasks">${c.planned.map((t) => `
           <li><span class="txt">${esc(t.text)}</span>
-            <button class="icon" data-action="checkin-remove" data-i="${i}" aria-label="Remove task: ${esc(t.text)}">×</button>
+            <button class="icon" data-action="checkin-remove" data-key="${esc(t.key)}" aria-label="Remove task: ${esc(t.text)}">×</button>
           </li>`).join('')}</ul>`
           : `<p class="muted">${prev ? 'You didn\'t set any tasks for today.' : 'No tasks yet.'}</p>`}
         <div class="add-row">
@@ -398,8 +440,8 @@
       <section class="card">
         <h3>Unfinished from ${esc(relDay(prev.date))}</h3>
         <p class="muted">Tick the ones to bring into today. Unticked ones stay behind in that day's record.</p>
-        <ul class="tasks">${c.carry.map((t, i) => `
-          <li><label class="check"><input type="checkbox" data-action="checkin-carry" data-i="${i}" ${t.on ? 'checked' : ''}>
+        <ul class="tasks">${c.carry.map((t) => `
+          <li><label class="check"><input type="checkbox" data-action="checkin-carry" data-key="${esc(t.key)}" ${t.on ? 'checked' : ''}>
             <span class="txt">${esc(t.text)}</span></label></li>`).join('')}</ul>
       </section>` : ''}
       <button class="btn primary big" data-action="checkin-start">Start my day</button>`;
@@ -478,6 +520,29 @@
       </section>`;
   }
 
+  // Tasks you set for today last night that are not on today's list (and that
+  // you did not deliberately drop). Shown with a one-tap fix.
+  function missingPlanned(entry, prev) {
+    if (!prev || !prev.nextTasks.length) return [];
+    const have = new Set(entry.tasks.map((t) => norm(t.text)));
+    const skipped = new Set((entry.skippedPlanned || []).map(norm));
+    return prev.nextTasks.filter((t) => !have.has(norm(t.text)) && !skipped.has(norm(t.text)));
+  }
+
+  function missingPlannedHtml(entry, prev) {
+    const missing = missingPlanned(entry, prev);
+    if (!missing.length) return '';
+    return `
+      <section class="card notice-card" role="status">
+        <h3>${missing.length === 1 ? '1 task' : `${missing.length} tasks`} you set for today ${missing.length === 1 ? 'isn\'t' : 'aren\'t'} on your list</h3>
+        <ul class="plain">${missing.map((t) => `<li>${esc(t.text)}</li>`).join('')}</ul>
+        <div class="row">
+          <button class="btn primary" data-action="planned-add">Add ${missing.length === 1 ? 'it' : 'them'}</button>
+          <button class="btn" data-action="planned-dismiss">Dismiss</button>
+        </div>
+      </section>`;
+  }
+
   function todayHtml() {
     const today = todayKey();
     const entry = state.entries[today];
@@ -488,6 +553,7 @@
         <p class="eyebrow">${esc(fmtDate(today))}</p>
         <h2>Today</h2>
       </div>
+      ${missingPlannedHtml(entry, prev)}
       ${todayTasksHtml(entry)}
       ${prev ? `<details class="card"><summary>Recap of ${esc(relDay(prev.date))}</summary>${recapHtml(prev)}</details>` : ''}
       ${entry.closedAt && !state.editingClose ? closedHtml(entry) : standdownFormHtml(entry)}`;
@@ -629,7 +695,9 @@
 
   function render() {
     state.renderedDay = todayKey();
+    const waiting = !READONLY && state.cloud.user && !state.cloud.pulled && state.tab === 'today';
     const body = locked() ? gateHtml()
+      : waiting ? '<p class="muted pad">Loading your latest entries…</p>'
       : state.tab === 'today' ? todayHtml()
       : state.tab === 'latest' ? latestHtml()
       : state.tab === 'history' ? historyHtml()
@@ -675,9 +743,9 @@
     state.cloud.user = res.data.session.user;
     state.cloud.message = '';
     state.tab = 'today';
+    state.cloud.pulled = false;
     render();
-    await pullAll();
-    render();
+    await syncFromCloud();
   }
 
   async function shareAction(kind) {
@@ -734,17 +802,29 @@
 
     'checkin-add'() {
       const text = takeInput('checkin-add');
-      if (text) state.checkin.planned.push({ text });
+      if (text) state.checkin.extra.push(text);
       render();
     },
-    'checkin-remove'(el) { state.checkin.planned.splice(Number(el.dataset.i), 1); render(); },
-    'checkin-carry'(el) { state.checkin.carry[Number(el.dataset.i)].on = el.checked; },
+    'checkin-remove'(el) {
+      const key = el.dataset.key;
+      if (key.startsWith('x:')) state.checkin.extra.splice(Number(key.slice(2)), 1);
+      else state.checkin.removed.push(key);
+      render();
+    },
+    'checkin-carry'(el) {
+      const off = state.checkin.carryOff;
+      const key = el.dataset.key;
+      if (el.checked) state.checkin.carryOff = off.filter((k) => k !== key);
+      else if (!off.includes(key)) off.push(key);
+    },
     'checkin-start'() {
+      const today = todayKey();
       const pending = takeInput('checkin-add');
       state.focus = null;
-      if (pending) state.checkin.planned.push({ text: pending });
+      if (pending) state.checkin.extra.push(pending);
       const entry = todayEntry();
-      const c = state.checkin;
+      const c = checkinLists(today, previousEntry(today));
+      entry.skippedPlanned = [...(entry.skippedPlanned || []), ...c.removedText];
       entry.tasks = [
         ...entry.tasks,
         ...c.planned.map((t) => ({ id: uid(), text: t.text, done: false, carried: false })),
@@ -753,6 +833,7 @@
       entry.checkedInAt = Date.now();
       state.checkin = null;
       saveEntry(entry);
+      flushNow();
       render();
       window.scrollTo(0, 0);
     },
@@ -762,6 +843,18 @@
       if (text) { const e = todayEntry(); e.tasks.push({ id: uid(), text, done: false, carried: false }); saveEntry(e); }
       render();
     },
+    'planned-add'() {
+      const e = todayEntry();
+      for (const t of missingPlanned(e, previousEntry(e.date))) {
+        e.tasks.push({ id: uid(), text: t.text, done: false, carried: false });
+      }
+      saveEntry(e); flushNow(); render();
+    },
+    'planned-dismiss'() {
+      const e = todayEntry();
+      e.skippedPlanned = [...(e.skippedPlanned || []), ...missingPlanned(e, previousEntry(e.date)).map((t) => t.text)];
+      saveEntry(e); render();
+    },
     'task-toggle'(el) {
       const e = todayEntry();
       const t = e.tasks.find((x) => x.id === el.dataset.id);
@@ -770,6 +863,8 @@
     },
     'task-remove'(el) {
       const e = todayEntry();
+      const gone = e.tasks.find((x) => x.id === el.dataset.id);
+      if (gone) e.skippedPlanned = [...(e.skippedPlanned || []), gone.text];
       e.tasks = e.tasks.filter((x) => x.id !== el.dataset.id);
       saveEntry(e); render();
     },
@@ -796,7 +891,7 @@
       if (pending) e.nextTasks.push({ id: uid(), text: pending });
       e.closedAt = e.closedAt || Date.now();
       state.editingClose = false;
-      saveEntry(e); render();
+      saveEntry(e); flushNow(); render();
     },
     'edit-close'() { state.editingClose = true; render(); },
 
@@ -821,7 +916,7 @@
       if (state.dirty.size) await flush();
       if (state.dirty.size && !confirm('Some changes have not synced yet and will be lost if you sign out now. Sign out anyway?')) return;
       await state.cloud.client.auth.signOut();
-      state.cloud.user = null; state.cloud.share = undefined;
+      state.cloud.user = null; state.cloud.share = undefined; state.cloud.pulled = false;
       state.entries = {}; state.dirty = new Set(); state.checkin = null;
       persistLocal();
       setStatus('local');
@@ -871,13 +966,21 @@
     if (fn) fn(ev.target);
   });
 
-  // If the app is left open overnight, switch to the new day's check-in.
+  // Leaving the app: upload anything unsaved right away. Coming back: fetch
+  // the latest entries, and if the app was left open overnight, wait for
+  // them before showing the new day's check-in.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible') return;
-    if (state.renderedDay !== todayKey()) { state.editingClose = false; render(); }
-    if (READONLY && state.cloud.client) loadShared();
-    else if (state.dirty.size) scheduleFlush();
+    if (document.visibilityState === 'hidden') { flushNow(); return; }
+    if (READONLY) { if (state.cloud.client) loadShared(); return; }
+    const newDay = state.renderedDay !== todayKey();
+    if (newDay) {
+      state.editingClose = false;
+      if (state.cloud.user) state.cloud.pulled = false;
+      render();
+    }
+    if (state.cloud.user) syncFromCloud();
   });
+  window.addEventListener('pagehide', flushNow);
   window.addEventListener('online', () => { if (state.dirty.size) scheduleFlush(); });
   window.addEventListener('hashchange', () => location.reload());
 
