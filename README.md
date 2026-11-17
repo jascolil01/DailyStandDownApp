@@ -2,11 +2,14 @@
 
 A small web app for handing your day over to tomorrow-you.
 
-- **Morning check-in** — a recap of your last entry (notes to yourself, what got done, blockers, mood), the tasks you set for today, and a choice of which unfinished tasks to carry over.
-- **During the day** — tick tasks off, add new ones.
-- **Evening stand-down** — what you got done, blockers, notes to tomorrow-you, a mood/energy rating, and tomorrow's tasks.
-- **History** — every day you filled in, searchable, with older/newer navigation.
-- **Read-only link** — other devices and people can read your entries but cannot change them.
+- **Morning check-in**: a recap of your last entry, the tasks you set for today (must-do tasks first), any tasks you'd set for this date, and a choice of which unfinished tasks to carry over. The first check-in of each week adds a look back at last week.
+- **During the day**: tick tasks off; star must-do tasks; edit, reorder (drag the ⠿ handle or use the ⋯ menu), delete, or move a task to a later date. Tasks that keep getting carried over (3+ days) are flagged with "Do it today", "Move to later" or "Drop it".
+- **Coming up**: tasks set for a specific date, which appear in that day's check-in.
+- **Evening stand-down**: what you got done (one tap copies in your ticked tasks), blockers, notes to tomorrow-you, a mood/energy rating, and tomorrow's tasks (one tap brings today's unfinished ones along).
+- **History**: every day as a searchable list or a month calendar coloured by mood or tasks done. Export any day or date range as a text file or a printable page (save as PDF from the print dialog).
+- **Trends**: mood and tasks over 30 or 90 days, with this week and last week summarised.
+- **Read-only link**: other devices and people can read your entries but cannot change them, and you can hide mood, notes or blockers from it.
+- **Works offline** after the first visit; changes sync when you're back online.
 
 The day rolls over at 4am, so a stand-down written after midnight still belongs to the day you just had. If you skip days (a weekend, say), the morning recap shows your most recent entry.
 
@@ -38,10 +41,15 @@ GitHub Pages on a free account needs the repository to be public. That publishes
 6. In the app, **Sign in** with that email and password. Entries already on the device are uploaded.
 7. Choose **Create read-only link** and send the link to your other devices or to other people.
 
+### Updating the database
+
+When a new version of the app changes `supabase/schema.sql`, open the Supabase **SQL Editor**, paste the whole file again and run it. It is safe to run more than once and keeps your entries.
+
 ### How read-only works
 
 - Only the signed-in owner can write; the database refuses every other write.
 - The link carries a long random code. The database hands entries only to someone presenting that code, through a function that can read and nothing else.
+- In Settings you can hide mood, notes to tomorrow-me or blockers from the link. The database removes hidden fields before sending anything, so people with the link can't see them at all.
 - **Replace with a new link** or **Turn off sharing** in Settings makes the old link stop working immediately.
 - Anyone who has the link can read all your entries, so share it like you would a password.
 
@@ -52,4 +60,5 @@ GitHub Pages on a free account needs the repository to be public. That publishes
 | `index.html`, `styles.css`, `app.js` | The app |
 | `config.js` | Optional Supabase project details |
 | `supabase/schema.sql` | Database tables and access rules |
+| `sw.js` | Saves the app's files so it opens offline |
 | `vendor/supabase.js` | Supabase client library (MIT), bundled so the app needs no CDN |

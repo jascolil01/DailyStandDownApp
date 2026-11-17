@@ -40,6 +40,11 @@ create table if not exists public.share_links (
   created_at timestamptz not null default now()
 );
 
+-- Fields the owner chose to keep off the read-only link.
+alter table public.share_links add column if not exists hide_mood boolean not null default false;
+alter table public.share_links add column if not exists hide_notes boolean not null default false;
+alter table public.share_links add column if not exists hide_blockers boolean not null default false;
+
 alter table public.share_links enable row level security;
 
 drop policy if exists "share owner all" on public.share_links;
@@ -49,8 +54,9 @@ create policy "share owner all" on public.share_links
   with check (owner = (select auth.uid()));
 
 -- The only thing a read-only link can do: fetch the entries that belong to
--- the owner of that code. There is no matching function for writing, so
--- people with the link cannot change anything.
+-- the owner of that code, minus any fields the owner chose to hide. There is
+-- no matching function for writing, so people with the link cannot change
+-- anything.
 create or replace function public.shared_entries(share_code text)
 returns table (day date, data jsonb, updated_at timestamptz)
 language sql
@@ -58,7 +64,13 @@ stable
 security definer
 set search_path = ''
 as $$
-  select e.day, e.data, e.updated_at
+  select e.day,
+         e.data - array_remove(array[
+           case when s.hide_mood then 'mood' end,
+           case when s.hide_notes then 'notes' end,
+           case when s.hide_blockers then 'blockers' end
+         ], null),
+         e.updated_at
   from public.entries e
   join public.share_links s on s.owner = e.owner
   where s.code = share_code
