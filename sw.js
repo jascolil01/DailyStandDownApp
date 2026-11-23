@@ -2,7 +2,7 @@
 // Always tries the network first so updates show up straight away; the saved
 // copy is only used when the network can't be reached. Supabase requests go
 // to another site and are never touched here.
-const CACHE = 'stand-down-v1';
+const CACHE = 'stand-down-v2';
 const FILES = [
   './',
   'index.html',

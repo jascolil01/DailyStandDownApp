@@ -45,6 +45,21 @@
 
   // ---------- small helpers ----------
 
+  // Line icons (24x24, drawn with the current text colour).
+  const ICONS = {
+    star: '<path d="M12 3.2l2.7 5.5 6 .9-4.35 4.25 1 6L12 17.05 6.65 19.85l1-6L3.3 9.6l6-.9z"/>',
+    more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+    grip: '<circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>',
+    x: '<path d="M18 6L6 18M6 6l12 12"/>',
+    'chev-left': '<path d="M15 18l-6-6 6-6"/>',
+    'chev-right': '<path d="M9 18l6-6-6-6"/>',
+    back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+    check: '<path d="M20 6L9 17l-5-5"/>',
+    download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  };
+  const ic = (name, cls) => `<svg class="ic ${cls || ''}" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">${ICONS[name]}</svg>`;
+  const starIcon = (on) => ic('star', on ? 'filled' : '');
+
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -425,7 +440,7 @@
 
   // ---------- read-only link (owner) ----------
 
-  const HIDE_FIELDS = [['hide_mood', 'Mood / energy'], ['hide_notes', 'Notes to tomorrow-me'], ['hide_blockers', 'Blockers / problems']];
+  const HIDE_FIELDS = [['hide_mood', 'Mood / energy'], ['hide_blockers', 'Blockers / problems']];
 
   async function loadShare() {
     const { client } = state.cloud;
@@ -504,13 +519,13 @@
     return `<span class="tag">carried over${n > 1 ? ` ${n} days` : ''}</span>`;
   }
 
-  const starMark = (t) => (t.priority ? '<span class="star-mark" title="Must do" aria-label="Must do">★</span>' : '');
+  const starMark = (t) => (t.priority ? `<span class="star-mark" title="Must do"><span class="sr">Must do: </span>${starIcon(true)}</span>` : '');
 
   function staticTasksHtml(tasks) {
     if (!tasks.length) return '<p class="muted">No tasks were set.</p>';
     return `<ul class="tasks static">${tasks.map((t) => `
       <li class="${t.done ? 'done' : ''} ${t.priority ? 'prio' : ''}">
-        <span class="box" aria-hidden="true">${t.done ? '✓' : ''}</span>
+        <span class="box" aria-hidden="true">${t.done ? ic('check') : ''}</span>
         <span class="txt-wrap"><span class="txt">${starMark(t)}${esc(t.text)}</span>${carriedTag(t)}</span>
         <span class="sr">${t.done ? '(done)' : '(not done)'}</span>
       </li>`).join('')}</ul>`;
@@ -538,7 +553,7 @@
         <h3>End-of-day stand-down</h3>
         ${textBlock('What got done', entry.done)}
         ${textBlock('Blockers / problems', entry.blockers)}
-        ${textBlock('Notes to tomorrow-me', entry.notes, 'handover')}
+        ${textBlock('Notes to tomorrow-me', entry.notes)}
       </section>` : ''}
       ${entry.nextTasks.length ? `
       <section class="card">
@@ -556,14 +571,13 @@
     const { total, done } = taskStats(prev);
     const missed = prev.tasks.filter((t) => !t.done);
     const must = prev.tasks.filter((t) => t.priority);
-    const empty = !prev.done && !prev.blockers && !prev.notes && !total;
+    const empty = !prev.done && !prev.blockers && !total;
     return `
       <div class="day-meta">
         ${total ? `<span class="stat">${done} of ${total} tasks done</span>` : ''}
         ${moodHtml(prev.mood)}
       </div>
       ${empty ? '<p class="muted">Nothing was written down that day.</p>' : ''}
-      ${textBlock('Notes from past-you', prev.notes, 'handover')}
       ${must.length ? `<div class="block must"><h4>Must-do tasks</h4>${staticTasksHtml(must)}</div>` : ''}
       ${textBlock('What got done', prev.done)}
       ${textBlock('Blockers / problems', prev.blockers)}
@@ -632,11 +646,11 @@
     const ids = `data-list="${list}" data-id="${t.id}"`;
     return `
       <li data-id="${t.id}" class="${t.done ? 'done' : ''} ${t.priority ? 'prio' : ''} ${m ? 'open' : ''}">
-        <span class="handle" aria-hidden="true" title="Drag to reorder">⠿</span>
+        <span class="handle" aria-hidden="true" title="Drag to reorder">${ic('grip')}</span>
         ${main}
         <button class="icon star ${t.priority ? 'on' : ''}" data-action="star" ${ids} aria-pressed="${!!t.priority}"
-          aria-label="Must do: ${esc(t.text)}" title="Must do">${t.priority ? '★' : '☆'}</button>
-        <button class="icon" data-action="menu" ${ids} aria-expanded="${!!m}" aria-label="More options for: ${esc(t.text)}">⋯</button>
+          aria-label="Must do: ${esc(t.text)}" title="Must do">${starIcon(t.priority)}</button>
+        <button class="icon" data-action="menu" ${ids} aria-expanded="${!!m}" aria-label="More options for: ${esc(t.text)}">${ic('more')}</button>
       </li>
       ${m ? `<li class="task-menu">${menuHtml(list, t, i, n, m)}</li>` : ''}`;
   }
@@ -707,8 +721,8 @@
       <li class="${t.priority ? 'prio' : ''}">
         <span class="txt-wrap"><span class="txt">${esc(t.text)}</span>${extraTag || ''}</span>
         <button class="icon star ${t.priority ? 'on' : ''}" data-action="checkin-star" data-key="${esc(t.key)}"
-          aria-pressed="${!!t.priority}" aria-label="Must do: ${esc(t.text)}" title="Must do">${t.priority ? '★' : '☆'}</button>
-        <button class="icon" data-action="checkin-remove" data-key="${esc(t.key)}" aria-label="Remove task: ${esc(t.text)}">×</button>
+          aria-pressed="${!!t.priority}" aria-label="Must do: ${esc(t.text)}" title="Must do">${starIcon(t.priority)}</button>
+        <button class="icon" data-action="checkin-remove" data-key="${esc(t.key)}" aria-label="Remove task: ${esc(t.text)}">${ic('x')}</button>
       </li>`;
   }
 
@@ -729,7 +743,7 @@
       <section class="card">
         <h3>Welcome</h3>
         <p>This is your first day, so there's nothing to recap yet. Add what you want to get done today,
-        then come back this evening to stand down and leave notes for tomorrow.</p>
+        then come back this evening to stand down and set tomorrow's tasks.</p>
       </section>`}
       ${lastWeek && lastWeek.days ? weekCardHtml(lastWeek, 'Last week at a glance') : ''}
       <section class="card">
@@ -738,7 +752,7 @@
           t.src === 'later' ? `<span class="tag">${t.due < today ? `was set for ${esc(fmtShort(t.due))}` : 'set for today'}</span>`
             : t.carriedCount ? carriedTag(t) : '')).join('')}</ul>`
           : `<p class="muted">${prev ? 'You didn\'t set any tasks for today.' : 'No tasks yet.'}</p>`}
-        <p class="muted small">Tap ☆ to mark a task as must-do; must-do tasks go to the top.</p>
+        <p class="muted small">Star a task to mark it as must-do; must-do tasks go to the top.</p>
         <div class="add-row">
           <input type="text" data-focus="checkin-add" data-enter="checkin-add" placeholder="Add a task for today" aria-label="Add a task for today" maxlength="300">
           <button class="btn" data-action="checkin-add">Add</button>
@@ -841,7 +855,7 @@
         ${items.length ? `<ul class="tasks">${items.map((s) => `
           <li>
             <span class="txt-wrap"><span class="txt">${starMark(s)}${esc(s.text)}</span><span class="tag">${esc(fmtDay(s.due))}</span></span>
-            <button class="icon" data-action="later-remove" data-from="${s.from}" data-id="${s.id}" aria-label="Delete task: ${esc(s.text)}">×</button>
+            <button class="icon" data-action="later-remove" data-from="${s.from}" data-id="${s.id}" aria-label="Delete task: ${esc(s.text)}">${ic('x')}</button>
           </li>`).join('')}</ul>` : ''}
         <div class="add-row wrap">
           <input type="text" data-focus="later-add" data-enter="later-add" placeholder="Task for a later date" aria-label="Task for a later date" maxlength="300">
@@ -866,8 +880,6 @@
         </div>
         <label class="field"><span>Blockers / problems</span>
           <textarea data-field="blockers" rows="3" placeholder="What got in the way or still needs solving">${esc(entry.blockers)}</textarea></label>
-        <label class="field"><span>Notes to tomorrow-me</span>
-          <textarea data-field="notes" rows="4" placeholder="Where you left off, reminders, context you'll want in the morning">${esc(entry.notes)}</textarea></label>
         <div class="field"><span id="mood-label">Mood / energy</span>
           <div class="moods" role="group" aria-labelledby="mood-label">
             ${[1, 2, 3, 4, 5].map((n) => `
@@ -897,7 +909,6 @@
         </div>
         ${textBlock('What got done', entry.done)}
         ${textBlock('Blockers / problems', entry.blockers)}
-        ${textBlock('Notes to tomorrow-me', entry.notes, 'handover')}
         <div class="block"><h4>Tasks for tomorrow</h4>
           ${entry.nextTasks.length ? plainListHtml(prioFirst(entry.nextTasks)) : '<p class="muted">None set.</p>'}
         </div>
@@ -996,9 +1007,9 @@
     return `
       <section class="card">
         <div class="cal-head">
-          <button class="icon" data-action="cal-month" data-month="${prevMonth}" aria-label="Previous month">‹</button>
+          <button class="icon" data-action="cal-month" data-month="${prevMonth}" aria-label="Previous month">${ic('chev-left')}</button>
           <h3>${esc(first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</h3>
-          <button class="icon" data-action="cal-month" data-month="${nextMonth}" aria-label="Next month">›</button>
+          <button class="icon" data-action="cal-month" data-month="${nextMonth}" aria-label="Next month">${ic('chev-right')}</button>
         </div>
         <div class="seg" role="group" aria-label="Colour days by">
           <button class="seg-btn ${by === 'mood' ? 'on' : ''}" data-action="cal-color" data-by="mood" aria-pressed="${by === 'mood'}" ${hasMoods() ? '' : 'disabled'}>Mood</button>
@@ -1031,7 +1042,7 @@
       <section class="card" aria-labelledby="export-h">
         <div class="card-head">
           <h3 id="export-h">Export</h3>
-          <button class="icon" data-action="export-close" aria-label="Close export">×</button>
+          <button class="icon" data-action="export-close" aria-label="Close export">${ic('x')}</button>
         </div>
         <div class="row">${presets.map(([label, from, to]) => `
           <button class="btn small ${r.from === from && r.to === to ? 'on' : ''}" data-action="export-preset" data-from="${from}" data-to="${to}">${label}</button>`).join('')}
@@ -1043,7 +1054,7 @@
         <p class="muted">${count} day${count === 1 ? '' : 's'} with entries in this range.</p>
         <div class="row">
           <button class="btn primary" data-action="export-pdf" ${count ? '' : 'disabled'}>Print or save as PDF</button>
-          <button class="btn" data-action="export-txt" ${count ? '' : 'disabled'}>Download text file</button>
+          <button class="btn" data-action="export-txt" ${count ? '' : 'disabled'}>${ic('download')} Download text file</button>
         </div>
       </section>`;
   }
@@ -1055,10 +1066,10 @@
       const older = keys[i - 1]; const newer = keys[i + 1];
       return `
         <div class="day-nav">
-          <button class="btn" data-action="open-day" data-day="">← All days</button>
+          <button class="btn" data-action="open-day" data-day="">${ic('back')} All days</button>
           <span class="spacer"></span>
-          <button class="btn" data-action="open-day" data-day="${older || ''}" ${older ? '' : 'disabled'} aria-label="Older day">‹ Older</button>
-          <button class="btn" data-action="open-day" data-day="${newer || ''}" ${newer ? '' : 'disabled'} aria-label="Newer day">Newer ›</button>
+          <button class="btn" data-action="open-day" data-day="${older || ''}" ${older ? '' : 'disabled'} aria-label="Older day">${ic('chev-left')} Older</button>
+          <button class="btn" data-action="open-day" data-day="${newer || ''}" ${newer ? '' : 'disabled'} aria-label="Newer day">Newer ${ic('chev-right')}</button>
         </div>
         <div class="hero hero-row"><h2>${esc(fmtDate(state.historyDay))}</h2>
           <button class="btn small" data-action="export-open" data-day="${state.historyDay}">Export</button></div>

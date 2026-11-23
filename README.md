@@ -5,10 +5,10 @@ A small web app for handing your day over to tomorrow-you.
 - **Morning check-in**: a recap of your last entry, the tasks you set for today (must-do tasks first), any tasks you'd set for this date, and a choice of which unfinished tasks to carry over. The first check-in of each week adds a look back at last week.
 - **During the day**: tick tasks off; star must-do tasks; edit, reorder (drag the ⠿ handle or use the ⋯ menu), delete, or move a task to a later date. Tasks that keep getting carried over (3+ days) are flagged with "Do it today", "Move to later" or "Drop it".
 - **Coming up**: tasks set for a specific date, which appear in that day's check-in.
-- **Evening stand-down**: what you got done (one tap copies in your ticked tasks), blockers, notes to tomorrow-you, a mood/energy rating, and tomorrow's tasks (one tap brings today's unfinished ones along).
+- **Evening stand-down**: what you got done (one tap copies in your ticked tasks), blockers, a mood/energy rating, and tomorrow's tasks (one tap brings today's unfinished ones along).
 - **History**: every day as a searchable list or a month calendar coloured by mood or tasks done. Export any day or date range as a text file or a printable page (save as PDF from the print dialog).
 - **Trends**: mood and tasks over 30 or 90 days, with this week and last week summarised.
-- **Read-only link**: other devices and people can read your entries but cannot change them, and you can hide mood, notes or blockers from it.
+- **Read-only link**: other devices and people can read your entries but cannot change them, and you can hide mood or blockers from it.
 - **Works offline** after the first visit; changes sync when you're back online.
 
 The day rolls over at 4am, so a stand-down written after midnight still belongs to the day you just had. If you skip days (a weekend, say), the morning recap shows your most recent entry.
@@ -49,7 +49,7 @@ When a new version of the app changes `supabase/schema.sql`, open the Supabase *
 
 - Only the signed-in owner can write; the database refuses every other write.
 - The link carries a long random code. The database hands entries only to someone presenting that code, through a function that can read and nothing else.
-- In Settings you can hide mood, notes to tomorrow-me or blockers from the link. The database removes hidden fields before sending anything, so people with the link can't see them at all.
+- In Settings you can hide mood or blockers from the link. The database removes hidden fields before sending anything, so people with the link can't see them at all.
 - **Replace with a new link** or **Turn off sharing** in Settings makes the old link stop working immediately.
 - Anyone who has the link can read all your entries, so share it like you would a password.
 
