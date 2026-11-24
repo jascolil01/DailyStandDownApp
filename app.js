@@ -56,9 +56,18 @@
     back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
     check: '<path d="M20 6L9 17l-5-5"/>',
     download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+    today: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M8 12.5l2.8 2.8L16 9.5"/>',
+    history: '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+    trends: '<path d="M4 20V11M10 20V5M16 20v-6M3 20.5h18"/>',
+    settings: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/>',
+    latest: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/>',
   };
   const ic = (name, cls) => `<svg class="ic ${cls || ''}" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">${ICONS[name]}</svg>`;
   const starIcon = (on) => ic('star', on ? 'filled' : '');
+
+  // Wide screens get the desktop layout: sidebar, columns, master-detail.
+  const DESKTOP_QUERY = window.matchMedia('(min-width: 1024px)');
+  const isDesktop = () => DESKTOP_QUERY.matches;
 
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -487,17 +496,23 @@
     const tabs = locked() ? []
       : READONLY ? [['latest', 'Latest'], ['history', 'History'], ['trends', 'Trends']]
       : [['today', 'Today'], ['history', 'History'], ['trends', 'Trends'], ['settings', 'Settings']];
+    const who = !READONLY && state.cloud.user ? state.cloud.user.email : '';
     return `
       <header class="top">
         <div class="brand">
-          <img src="icon.svg" alt="" width="32" height="32">
+          <img src="icon.svg" alt="" width="28" height="28">
           <h1>Daily Stand-Down</h1>
+        </div>
+        <div class="top-status">
           ${syncChipHtml()}
+          ${who ? `<span class="who" title="${esc(who)}">${esc(who)}</span>` : ''}
+          ${tabs.length ? `<p class="kbd-hint"><kbd>1</kbd>–<kbd>${tabs.length}</kbd> sections${READONLY ? '' : ' · <kbd>N</kbd> new task'}
+            · <kbd>/</kbd> search · <kbd>←</kbd><kbd>→</kbd> days</p>` : ''}
         </div>
         <nav class="tabs" aria-label="Sections">
           ${tabs.map(([id, label]) => `
             <button class="tab ${state.tab === id ? 'active' : ''}" data-action="tab" data-tab="${id}"
-              ${state.tab === id ? 'aria-current="page"' : ''}>${label}</button>`).join('')}
+              ${state.tab === id ? 'aria-current="page"' : ''}>${ic(id)}<span>${label}</span></button>`).join('')}
         </nav>
       </header>`;
   }
@@ -536,18 +551,25 @@
   }
 
   // Full read-only picture of one day, used by History, the shared view and print.
-  function dayHtml(entry) {
+  function dayHtml(entry, split) {
     const { total, done } = taskStats(entry);
+    const tasks = `
+      <section class="card">
+        <h3>Tasks for the day</h3>
+        ${staticTasksHtml(entry.tasks)}
+      </section>`;
+    const side = dayDetailsHtml(entry);
     return `
       <div class="day-meta">
         ${total ? `<span class="stat">${done} of ${total} tasks done</span>` : ''}
         ${moodHtml(entry.mood)}
         ${entry.closedAt ? '' : '<span class="stat open">Day not closed out</span>'}
       </div>
-      <section class="card">
-        <h3>Tasks for the day</h3>
-        ${staticTasksHtml(entry.tasks)}
-      </section>
+      ${split && side.trim() ? `<div class="cols"><div class="col-main">${tasks}</div><div class="col-side">${side}</div></div>` : tasks + side}`;
+  }
+
+  function dayDetailsHtml(entry) {
+    return `
       ${(entry.done || entry.blockers || entry.notes) ? `
       <section class="card">
         <h3>End-of-day stand-down</h3>
@@ -735,6 +757,8 @@
         <p class="eyebrow">${esc(fmtDate(today))}</p>
         <h2>${greeting()}. Here's your handover.</h2>
       </div>
+      <div class="cols side-first">
+      <div class="col-side">
       ${prev ? `
       <section class="card">
         <h3>Recap of ${esc(relDay(prev.date))}</h3>
@@ -746,6 +770,8 @@
         then come back this evening to stand down and set tomorrow's tasks.</p>
       </section>`}
       ${lastWeek && lastWeek.days ? weekCardHtml(lastWeek, 'Last week at a glance') : ''}
+      </div>
+      <div class="col-main">
       <section class="card">
         <h3>Your tasks for today</h3>
         ${c.planned.length ? `<ul class="tasks">${c.planned.map((t) => checkinRowHtml(t,
@@ -767,7 +793,9 @@
             <span class="txt-wrap"><span class="txt">${esc(t.text)}</span>${t.carriedCount - 1 >= 1 ? carriedTag({ carriedCount: t.carriedCount - 1 }) : ''}</span></label>
           </li>`).join('')}</ul>
       </section>` : ''}
-      <button class="btn primary big" data-action="checkin-start">Start my day</button>`;
+      <button class="btn primary big" data-action="checkin-start">Start my day</button>
+      </div>
+      </div>`;
   }
 
   // ---------- Today: during the day ----------
@@ -926,12 +954,18 @@
         <p class="eyebrow">${esc(fmtDate(today))}</p>
         <h2>Today</h2>
       </div>
-      ${missingPlannedHtml(entry, prev)}
-      ${staleHtml(entry)}
-      ${todayTasksHtml(entry)}
-      ${comingUpHtml()}
-      ${prev ? `<details class="card"><summary>Recap of ${esc(relDay(prev.date))}</summary>${recapHtml(prev)}</details>` : ''}
-      ${entry.closedAt && !state.editingClose ? closedHtml(entry) : standdownFormHtml(entry)}`;
+      <div class="cols">
+        <div class="col-main">
+          ${missingPlannedHtml(entry, prev)}
+          ${staleHtml(entry)}
+          ${todayTasksHtml(entry)}
+          ${comingUpHtml()}
+        </div>
+        <div class="col-side">
+          ${prev ? `<details class="card" data-details="recapOpen" ${(state.recapOpen ?? isDesktop()) ? 'open' : ''}><summary>Recap of ${esc(relDay(prev.date))}</summary>${recapHtml(prev)}</details>` : ''}
+          ${entry.closedAt && !state.editingClose ? closedHtml(entry) : standdownFormHtml(entry)}
+        </div>
+      </div>`;
   }
 
   // ---------- History ----------
@@ -953,7 +987,7 @@
       const e = state.entries[k];
       const { total, done } = taskStats(e);
       const snippet = (e.done || e.notes || e.blockers || e.tasks.map((t) => t.text).join(', ')).trim();
-      return `<li><button class="day-row" data-action="open-day" data-day="${k}">
+      return `<li><button class="day-row ${k === activeHistoryDay() ? 'active' : ''}" data-action="open-day" data-day="${k}" ${k === activeHistoryDay() ? 'aria-current="true"' : ''}>
         <span class="day-date"><b>${esc(fmtDay(k))}</b>
           <small>${fromKey(k).getFullYear()}</small></span>
         <span class="day-snip">${esc(snippet.slice(0, 140)) || '<i>No notes</i>'}</span>
@@ -991,7 +1025,7 @@
       const key = `${month}-${pad(d)}`;
       const e = state.entries[key];
       const lv = calLevel(e, by);
-      const cls = `cal-day ${lv ? `lv${lv}` : e ? 'has-entry' : 'empty'} ${key === today ? 'is-today' : ''}`;
+      const cls = `cal-day ${lv ? `lv${lv}` : e ? 'has-entry' : 'empty'} ${key === today ? 'is-today' : ''} ${key === activeHistoryDay() ? 'is-selected' : ''}`;
       if (e) {
         const { total, done } = taskStats(e);
         const label = [fmtDate(key, { weekday: 'long', month: 'long', day: 'numeric' }),
@@ -1033,7 +1067,7 @@
     const count = entriesBetween(r.from, r.to).length;
     const allKeys = sortedKeys();
     const presets = [
-      ...(state.historyDay ? [['This day', state.historyDay, state.historyDay]] : []),
+      ...(activeHistoryDay() ? [['This day', activeHistoryDay(), activeHistoryDay()]] : []),
       ['Last 7 days', shiftKey(today, -6), today],
       ['This month', `${today.slice(0, 7)}-01`, today],
       ...(allKeys.length ? [['Everything', allKeys[0], allKeys[allKeys.length - 1]]] : []),
@@ -1059,24 +1093,35 @@
       </section>`;
   }
 
-  function historyHtml() {
-    if (state.historyDay && state.entries[state.historyDay]) {
-      const keys = sortedKeys();
-      const i = keys.indexOf(state.historyDay);
-      const older = keys[i - 1]; const newer = keys[i + 1];
-      return `
-        <div class="day-nav">
-          <button class="btn" data-action="open-day" data-day="">${ic('back')} All days</button>
-          <span class="spacer"></span>
-          <button class="btn" data-action="open-day" data-day="${older || ''}" ${older ? '' : 'disabled'} aria-label="Older day">${ic('chev-left')} Older</button>
-          <button class="btn" data-action="open-day" data-day="${newer || ''}" ${newer ? '' : 'disabled'} aria-label="Newer day">Newer ${ic('chev-right')}</button>
-        </div>
-        <div class="hero hero-row"><h2>${esc(fmtDate(state.historyDay))}</h2>
-          <button class="btn small" data-action="export-open" data-day="${state.historyDay}">Export</button></div>
-        ${exportPanelHtml()}
-        ${dayHtml(state.entries[state.historyDay])}`;
-    }
+  // The day shown in History: the one picked, or on desktop the latest day.
+  function activeHistoryDay() {
+    if (state.historyDay && state.entries[state.historyDay]) return state.historyDay;
+    if (!isDesktop()) return null;
+    const keys = sortedKeys();
+    return keys[keys.length - 1] || null;
+  }
+
+  function historyDayHtml(day, withBack) {
+    const keys = sortedKeys();
+    const i = keys.indexOf(day);
+    const older = keys[i - 1]; const newer = keys[i + 1];
     return `
+      <div class="day-nav">
+        ${withBack ? `<button class="btn" data-action="open-day" data-day="">${ic('back')} All days</button>` : ''}
+        <span class="spacer"></span>
+        <button class="btn" data-action="open-day" data-day="${older || ''}" ${older ? '' : 'disabled'} aria-label="Older day" title="Older day (←)">${ic('chev-left')} Older</button>
+        <button class="btn" data-action="open-day" data-day="${newer || ''}" ${newer ? '' : 'disabled'} aria-label="Newer day" title="Newer day (→)">Newer ${ic('chev-right')}</button>
+      </div>
+      <div class="hero hero-row"><h2>${esc(fmtDate(day))}</h2>
+        <button class="btn small" data-action="export-open" data-day="${day}">Export</button></div>
+      ${withBack ? exportPanelHtml() : ''}
+      ${dayHtml(state.entries[day])}`;
+  }
+
+  function historyHtml() {
+    const desk = isDesktop();
+    if (!desk && state.historyDay && state.entries[state.historyDay]) return historyDayHtml(state.historyDay, true);
+    const listPane = `
       <div class="hero hero-row"><h2>History</h2>
         <button class="btn small" data-action="export-open">Export</button></div>
       ${exportPanelHtml()}
@@ -1087,6 +1132,14 @@
       ${state.histView === 'calendar' ? calendarHtml() : `
       <input type="search" class="search" data-search placeholder="Search past days" aria-label="Search past days" value="${esc(state.search)}">
       <div id="history-list">${historyListHtml()}</div>`}`;
+    if (!desk) return listPane;
+    const day = activeHistoryDay();
+    return `
+      <div class="cols history-cols">
+        <div class="col-main history-list-pane">${listPane}</div>
+        <div class="col-side history-day-pane">${day ? historyDayHtml(day, false)
+          : '<section class="card"><p class="muted">No days recorded yet. Your stand-downs will appear here.</p></section>'}</div>
+      </div>`;
   }
 
   // ---------- Trends ----------
@@ -1202,8 +1255,7 @@
       done += d.entry.tasks.filter((t) => t.done).length;
       if (d.entry.mood) { moodSum += d.entry.mood; moodN += 1; }
     }
-    const mainW = ($app.querySelector('main') || {}).clientWidth || Math.min(720, window.innerWidth) - 32;
-    const W = Math.max(260, Math.floor(mainW - 38));
+    const W = chartWidth(isDesktop() ? 2 : 1);
     const thisWeek = weekStats(weekStart(today));
     const lastWeek = weekStats(shiftKey(weekStart(today), -7));
     return `
@@ -1217,6 +1269,7 @@
         <div class="tile"><span class="tile-v">${set ? `${Math.round((done / set) * 100)}%` : '—'}</span><span class="tile-l">${set ? `tasks done (${done} of ${set})` : 'no tasks set'}</span></div>
         <div class="tile"><span class="tile-v">${moodN ? (moodSum / moodN).toFixed(1) : '—'}</span><span class="tile-l">average mood</span></div>
       </div>
+      <div class="grid-2">
       <section class="card chart-card">
         <h3>Mood / energy</h3>
         <div class="chart-wrap">${moodChart(days, W)}<div class="tip" hidden></div></div>
@@ -1229,6 +1282,11 @@
         </div>
         <div class="chart-wrap">${tasksChart(days, W)}<div class="tip" hidden></div></div>
       </section>
+      </div>
+      <div class="grid-2">
+      ${thisWeek.days ? weekCardHtml(thisWeek, READONLY ? 'Latest week' : 'This week so far') : ''}
+      ${lastWeek.days ? weekCardHtml(lastWeek, READONLY ? 'Week before' : 'Last week') : ''}
+      </div>
       <details class="card">
         <summary>Show as a table</summary>
         ${recorded.length ? `
@@ -1239,9 +1297,19 @@
             return `<tr><td>${esc(fmtDay(d.key))}</td><td>${d.entry.mood ? `${d.entry.mood} ${MOODS[d.entry.mood]}` : '—'}</td><td>${s.total ? `${s.done} of ${s.total}` : '—'}</td></tr>`;
           }).join('')}</tbody>
         </table></div>` : '<p class="muted">No days recorded in this period.</p>'}
-      </details>
-      ${thisWeek.days ? weekCardHtml(thisWeek, READONLY ? 'Latest week' : 'This week so far') : ''}
-      ${lastWeek.days ? weekCardHtml(lastWeek, READONLY ? 'Week before' : 'Last week') : ''}`;
+      </details>`;
+  }
+
+  // Width available to a chart inside a card, with `per` cards side by side.
+  function chartWidth(per) {
+    const main = $app.querySelector('main');
+    let w = Math.min(720, window.innerWidth) - 32;
+    if (main) {
+      const cs = getComputedStyle(main);
+      w = main.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    }
+    const gap = 16; const cardInset = 42;
+    return Math.max(260, Math.floor((w - gap * (per - 1)) / per - cardInset));
   }
 
   function showTip(i, hovered) {
@@ -1298,7 +1366,7 @@
           · ${c.status === 'offline' ? 'offline, showing the last copy' : 'refreshes automatically'}
           <button class="btn small" data-action="reload">Refresh now</button></p>
       </div>
-      ${dayHtml(state.entries[k])}`;
+      ${dayHtml(state.entries[k], true)}`;
   }
 
   function gateHtml() {
@@ -1363,6 +1431,8 @@
     }
     return `
       <div class="hero"><h2>Settings</h2></div>
+      <div class="cols">
+      <div class="col-main">
       <section class="card">
         <h3>Sync and sharing</h3>
         ${c.message ? `<p class="msg" role="status">${esc(c.message)}</p>` : ''}
@@ -1376,7 +1446,22 @@
           <button class="btn" data-action="export">Download backup</button>
           <label class="btn">Load backup<input type="file" id="import-file" accept="application/json,.json" hidden></label>
         </div>
-      </section>`;
+      </section>
+      </div>
+      <div class="col-side">
+      <section class="card">
+        <h3>Keyboard shortcuts</h3>
+        <table class="shortcuts"><tbody>
+          <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></td><td>Today, History, Trends, Settings</td></tr>
+          <tr><td><kbd>N</kbd></td><td>Add a task (on Today)</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Search History</td></tr>
+          <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Older / newer day in History</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Add what you typed</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Cancel editing a task</td></tr>
+        </tbody></table>
+      </section>
+      </div>
+      </div>`;
   }
 
   function render() {
@@ -1391,9 +1476,11 @@
       : settingsHtml();
     $app.innerHTML = `
       ${headerHtml()}
-      ${READONLY ? '<p class="banner">You are viewing a read-only copy. Nothing here can be changed.</p>' : ''}
-      ${state.notice ? `<p class="banner warn" role="alert">${esc(state.notice)}</p>` : ''}
-      <main>${body}</main>`;
+      <main>
+        ${READONLY ? '<p class="banner">You are viewing a read-only copy. Nothing here can be changed.</p>' : ''}
+        ${state.notice ? `<p class="banner warn" role="alert">${esc(state.notice)}</p>` : ''}
+        ${body}
+      </main>`;
     if (state.focus) {
       const el = $app.querySelector(`[data-focus="${state.focus}"]`);
       if (el) { el.focus(); if (el.select && state.focus === 'edit') el.select(); }
@@ -2002,6 +2089,44 @@
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { if (state.tab === 'trends') render(); }, 150);
+  });
+  DESKTOP_QUERY.addEventListener('change', () => { state.menu = null; render(); });
+
+  // Keyboard shortcuts (ignored while typing).
+  document.addEventListener('keydown', (ev) => {
+    if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    const t = ev.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (locked()) return;
+    const tabs = READONLY ? ['latest', 'history', 'trends'] : ['today', 'history', 'trends', 'settings'];
+    const go = (tab) => actions.tab({ dataset: { tab } });
+    if (/^[1-9]$/.test(ev.key) && tabs[Number(ev.key) - 1]) {
+      ev.preventDefault(); go(tabs[Number(ev.key) - 1]); return;
+    }
+    if ((ev.key === 'n' || ev.key === 'N') && !READONLY) {
+      ev.preventDefault();
+      if (state.tab !== 'today') go('today');
+      const input = $app.querySelector('[data-focus="task-add"], [data-focus="checkin-add"]');
+      if (input) input.focus();
+      return;
+    }
+    if (ev.key === '/') {
+      ev.preventDefault();
+      if (state.tab !== 'history') go('history');
+      if (state.histView !== 'list' || (state.historyDay && !isDesktop())) {
+        state.histView = 'list'; if (!isDesktop()) state.historyDay = null; render();
+      }
+      const search = $app.querySelector('[data-search]');
+      if (search) search.focus();
+      return;
+    }
+    if (state.tab === 'history' && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
+      const day = activeHistoryDay();
+      if (!day) return;
+      const keys = sortedKeys();
+      const next = keys[keys.indexOf(day) + (ev.key === 'ArrowLeft' ? -1 : 1)];
+      if (next) { ev.preventDefault(); state.historyDay = next; render(); }
+    }
   });
 
   if (READONLY) {

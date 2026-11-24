@@ -424,3 +424,105 @@ th { color: var(--muted); font-weight: 600; font-size: 0.74rem; text-transform: 
   .print-root .print-day h2 { font-size: 13pt; }
   .print-root .card { break-inside: avoid; padding: 10px 14px; }
 }
+
+/* ======================================================================
+   Layout structure shared by phone and desktop
+   ====================================================================== */
+
+.top { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "brand status" "nav nav"; align-items: center; }
+.brand { grid-area: brand; }
+.top-status { grid-area: status; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tabs { grid-area: nav; }
+.tab .ic { display: none; }
+.who, .kbd-hint { display: none; }
+
+kbd {
+  font: 600 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-2);
+  background: var(--card); border: 1px solid var(--line-strong); border-bottom-width: 2px;
+  border-radius: 4px; padding: 2px 5px; display: inline-block; min-width: 1.5em; text-align: center;
+}
+.shortcuts td { border-bottom: 1px solid var(--line); padding: 8px 6px; color: var(--ink-2); }
+.shortcuts td:first-child { white-space: nowrap; width: 1%; padding-right: 14px; }
+.shortcuts tr:last-child td { border-bottom: 0; }
+
+/* Columns stack on phones (side column first where marked). */
+.cols, .cols > .col-main, .cols > .col-side, .grid-2 { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.cols.side-first > .col-side { order: -1; }
+.grid-2:empty { display: none; }
+main > .banner { margin: 0; }
+
+.day-row.active { background: var(--primary-soft); box-shadow: inset 3px 0 0 var(--primary); }
+.cal-day.is-selected { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* ======================================================================
+   Desktop: sidebar navigation, wide content, columns
+   ====================================================================== */
+
+@media (min-width: 1024px) {
+  .app { max-width: none; padding: 0 0 0 240px; }
+
+  .top {
+    position: fixed; inset: 0 auto 0 0; width: 240px; z-index: 6;
+    margin: 0; padding: 18px 12px 16px;
+    display: flex; flex-direction: column; align-items: stretch; gap: 22px;
+    background: var(--card); border-bottom: 0; border-right: 1px solid var(--line);
+    backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
+  .brand { padding: 2px 8px; }
+  .brand h1 { font-size: 0.98rem; }
+
+  .tabs { flex-direction: column; gap: 2px; margin: 0; overflow: visible; order: 1; }
+  .tab {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    padding: 8px 10px; min-height: 38px; border: 0; border-radius: var(--radius-sm);
+    color: var(--ink-2); font-size: 0.9rem;
+  }
+  .tab .ic { display: inline-block; color: var(--muted); }
+  .tab:hover { background: var(--subtle); color: var(--ink); }
+  .tab.active { background: var(--primary-soft); color: var(--primary); }
+  .tab.active .ic { color: var(--primary); }
+
+  .top-status { order: 2; margin-top: auto; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px 8px 0; border-top: 1px solid var(--line); }
+  .who { display: block; font-size: 0.8rem; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kbd-hint { display: block; font-size: 0.74rem; color: var(--muted); line-height: 1.9; }
+  .kbd-hint kbd { font-size: 0.66rem; padding: 1px 4px; }
+
+  main { max-width: 1240px; margin: 0 auto; padding: 32px 40px 56px; gap: 18px; }
+  .hero h2 { font-size: 1.6rem; }
+  .card { padding: 20px 22px; }
+
+  .cols { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+  .cols > .col-main, .cols > .col-side { gap: 18px; }
+  .cols.side-first > .col-side { order: 0; }
+  .cols.side-first { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .cols.side-first > .col-main { grid-column: 1; grid-row: 1; }
+  .cols.side-first > .col-side { grid-column: 2; grid-row: 1; }
+
+  .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+
+  /* History: list on the left, the open day on the right */
+  .history-cols { grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); }
+  .history-list-pane { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow: auto; padding: 2px; margin: -2px; }
+  .history-list-pane .day-row { grid-template-columns: 1fr auto; padding: 10px 14px; }
+  .history-list-pane .day-snip { grid-column: 1 / -1; grid-row: 2; -webkit-line-clamp: 1; }
+  .history-list-pane .cal-day { font-size: 0.8rem; }
+  .history-day-pane .hero h2 { font-size: 1.35rem; }
+
+  /* Denser task rows suit a mouse */
+  .tasks li { min-height: 42px; padding: 4px 0; }
+  .icon { width: 32px; height: 32px; }
+  .btn.big { min-height: 44px; }
+
+  .tiles { gap: 18px; }
+  .tile { padding: 16px 18px; }
+  .tile-v { font-size: 1.7rem; }
+}
+
+@media (min-width: 1024px) and (max-width: 1180px) {
+  main { padding: 28px 28px 48px; }
+}
+
+@media print {
+  .cols, .grid-2 { display: block; }
+  .cols > div > * + *, .cols > div + div { margin-top: 10px; }
+}

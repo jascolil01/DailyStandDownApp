@@ -10,6 +10,7 @@ A small web app for handing your day over to tomorrow-you.
 - **Trends**: mood and tasks over 30 or 90 days, with this week and last week summarised.
 - **Read-only link**: other devices and people can read your entries but cannot change them, and you can hide mood or blockers from it.
 - **Works offline** after the first visit; changes sync when you're back online.
+- **Desktop layout** on wide screens: a sidebar, side-by-side columns (tasks next to the stand-down), History as a list with the selected day alongside, and keyboard shortcuts: `1`–`4` switch sections, `N` adds a task, `/` searches History, `←`/`→` step between days. Phones and narrow windows get the single-column layout.
 
 The day rolls over at 4am, so a stand-down written after midnight still belongs to the day you just had. If you skip days (a weekend, say), the morning recap shows your most recent entry.
 
