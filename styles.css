@@ -526,3 +526,25 @@ main > .banner { margin: 0; }
   .cols, .grid-2 { display: block; }
   .cols > div > * + *, .cols > div + div { margin-top: 10px; }
 }
+
+/* ---------- work hours ---------- */
+.work-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.6fr); gap: 12px 16px; }
+.work-grid > .field { min-width: 0; }
+.time-row .btn { flex: none; }
+.time-row { display: flex; gap: 6px; }
+.time-row input { flex: 1; min-width: 0; }
+input[type="time"], input[type="number"] {
+  width: 100%; font: inherit; font-variant-numeric: tabular-nums; color: var(--ink); background: var(--card);
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 8px 10px; min-height: 40px; box-shadow: var(--shadow);
+}
+input[type="time"]:focus, input[type="number"]:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent); }
+.work-total { font-size: 0.9rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.work-total b { font-size: 1.05rem; color: var(--ink); }
+.stat.subtle { background: none; border-color: transparent; color: var(--muted); padding-left: 2px; }
+.center { text-align: center; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+
+@media (max-width: 560px) {
+  .work-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+}
+.card .tiles { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }

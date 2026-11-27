@@ -124,11 +124,64 @@
       date, tasks: [], checkedInAt: null,
       done: '', blockers: '', notes: '', mood: null,
       nextTasks: [], skippedPlanned: [], scheduled: [], scheduledTaken: [],
+      work: { start: '', end: '', breakMin: 0 },
       closedAt: null, updatedAt: 0,
     };
   }
 
-  const withDefaults = (e) => ({ ...blankEntry(e.date), ...e });
+  // ---------- work hours ----------
+  // entry.work = { start: 'HH:MM', end: 'HH:MM', breakMin: minutes }.
+
+  const toMin = (hhmm) => { const [h, m] = String(hhmm).split(':').map(Number); return h * 60 + m; };
+  const isTime = (v) => /^\d{2}:\d{2}$/.test(v || '');
+  const nowHHMM = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+  function fmtTime(hhmm) {
+    if (!isTime(hhmm)) return '';
+    const [h, m] = hhmm.split(':').map(Number);
+    return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function fmtDur(min) {
+    if (min === null || min === undefined) return '—';
+    const h = Math.floor(min / 60); const m = Math.round(min % 60);
+    return h ? `${h}h${m ? ` ${m}m` : ''}` : `${m}m`;
+  }
+
+  // Minutes worked for a finished day, or null if start/finish aren't both set.
+  // A finish earlier than the start is taken as past midnight.
+  function minutesWorked(e) {
+    const w = e && e.work;
+    if (!w || !isTime(w.start) || !isTime(w.end)) return null;
+    let d = toMin(w.end) - toMin(w.start);
+    if (d < 0) d += 1440;
+    return Math.max(0, d - (Number(w.breakMin) || 0));
+  }
+
+  // For today: worked so far if started but not finished.
+  function minutesSoFar(e) {
+    const done = minutesWorked(e);
+    if (done !== null) return { min: done, live: false };
+    const w = e && e.work;
+    if (!w || !isTime(w.start) || e.date !== todayKey()) return null;
+    let d = toMin(nowHHMM()) - toMin(w.start);
+    if (d < 0) d += 1440;
+    return { min: Math.max(0, d - (Number(w.breakMin) || 0)), live: true };
+  }
+
+  function hoursSummary(e) {
+    const w = e && e.work;
+    if (!w || !isTime(w.start)) return '';
+    const span = `${fmtTime(w.start)} – ${isTime(w.end) ? fmtTime(w.end) : 'not finished'}`;
+    const brk = Number(w.breakMin) ? `, ${fmtDur(Number(w.breakMin))} break` : '';
+    return `${span}${brk}`;
+  }
+
+  const withDefaults = (e) => {
+    const out = { ...blankEntry(e.date), ...e };
+    out.work = { ...blankEntry(e.date).work, ...(e.work || {}) };
+    return out;
+  };
 
   const sortedKeys = () => Object.keys(state.entries).sort();
 
@@ -563,6 +616,8 @@
       <div class="day-meta">
         ${total ? `<span class="stat">${done} of ${total} tasks done</span>` : ''}
         ${moodHtml(entry.mood)}
+        ${minutesWorked(entry) !== null ? `<span class="stat" title="${esc(hoursSummary(entry))}">${fmtDur(minutesWorked(entry))} worked</span>` : ''}
+        ${hoursSummary(entry) ? `<span class="stat subtle">${esc(hoursSummary(entry))}</span>` : ''}
         ${entry.closedAt ? '' : '<span class="stat open">Day not closed out</span>'}
       </div>
       ${split && side.trim() ? `<div class="cols"><div class="col-main">${tasks}</div><div class="col-side">${side}</div></div>` : tasks + side}`;
@@ -611,9 +666,11 @@
   function weekStats(start) {
     const end = shiftKey(start, 6);
     const days = entriesBetween(start, end);
-    let set = 0; let done = 0; let moodSum = 0; let moodN = 0;
+    let set = 0; let done = 0; let moodSum = 0; let moodN = 0; let workMin = 0; let workDays = 0;
     const blockers = []; const stuck = new Map();
     for (const e of days) {
+      const wm = minutesWorked(e);
+      if (wm !== null) { workMin += wm; workDays += 1; }
       set += e.tasks.length;
       done += e.tasks.filter((t) => t.done).length;
       if (e.mood) { moodSum += e.mood; moodN += 1; }
@@ -626,7 +683,7 @@
         }
       }
     }
-    return { start, end, days: days.length, set, done, mood: moodN ? moodSum / moodN : null, blockers, stuck: [...stuck.values()] };
+    return { start, end, days: days.length, set, done, mood: moodN ? moodSum / moodN : null, workMin, workDays, blockers, stuck: [...stuck.values()] };
   }
 
   function weekCardHtml(w, title) {
@@ -640,6 +697,7 @@
         <div class="tiles">
           <div class="tile"><span class="tile-v">${w.days}</span><span class="tile-l">day${w.days === 1 ? '' : 's'} recorded</span></div>
           <div class="tile"><span class="tile-v">${pct === null ? '—' : `${pct}%`}</span><span class="tile-l">${w.set ? `tasks done (${w.done} of ${w.set})` : 'no tasks set'}</span></div>
+          <div class="tile"><span class="tile-v">${w.workDays ? fmtDur(w.workMin) : '—'}</span><span class="tile-l">${w.workDays ? `worked (avg ${fmtDur(Math.round(w.workMin / w.workDays))}/day)` : 'no hours logged'}</span></div>
           <div class="tile"><span class="tile-v">${w.mood === null ? '—' : w.mood.toFixed(1)}</span><span class="tile-l">average mood</span></div>
         </div>
         ${w.blockers.length ? `<div class="block"><h4>Blockers</h4><ul class="plain">${w.blockers.slice(-5).map((b) => `
@@ -794,6 +852,7 @@
           </li>`).join('')}</ul>
       </section>` : ''}
       <button class="btn primary big" data-action="checkin-start">Start my day</button>
+      <p class="muted small center">Your start time is set when you start your day; you can change it on Today.</p>
       </div>
       </div>`;
   }
@@ -928,6 +987,33 @@
       </section>`;
   }
 
+  function workCardHtml(entry) {
+    const w = entry.work || {};
+    const so = minutesSoFar(entry);
+    return `
+      <section class="card work-card" aria-labelledby="work-h">
+        <div class="card-head">
+          <h3 id="work-h">Work hours</h3>
+          <span class="work-total" id="work-total">${workTotalText(entry, so)}</span>
+        </div>
+        <div class="work-grid">
+          <label class="field"><span>Started</span>
+            <span class="time-row"><input type="time" data-work="start" value="${esc(w.start || '')}">
+            <button class="btn small" data-action="work-now" data-which="start">Now</button></span></label>
+          <label class="field"><span>Finished</span>
+            <span class="time-row"><input type="time" data-work="end" value="${esc(w.end || '')}">
+            <button class="btn small" data-action="work-now" data-which="end">Now</button></span></label>
+          <label class="field"><span>Break (minutes)</span>
+            <input type="number" data-work="breakMin" min="0" max="600" step="5" inputmode="numeric" value="${Number(w.breakMin) || 0}"></label>
+        </div>
+      </section>`;
+  }
+
+  function workTotalText(entry, so) {
+    if (!so) return '<span class="muted">Not started</span>';
+    return `<b>${fmtDur(so.min)}</b> ${so.live ? 'so far' : 'worked'}`;
+  }
+
   function closedHtml(entry) {
     return `
       <section class="card closed">
@@ -935,6 +1021,7 @@
           <h3>You've stood down for today</h3>
           ${moodHtml(entry.mood)}
         </div>
+        ${minutesWorked(entry) !== null ? `<p class="muted">${fmtDur(minutesWorked(entry))} worked · ${esc(hoursSummary(entry))}</p>` : ''}
         ${textBlock('What got done', entry.done)}
         ${textBlock('Blockers / problems', entry.blockers)}
         <div class="block"><h4>Tasks for tomorrow</h4>
@@ -956,6 +1043,7 @@
       </div>
       <div class="cols">
         <div class="col-main">
+          ${workCardHtml(entry)}
           ${missingPlannedHtml(entry, prev)}
           ${staleHtml(entry)}
           ${todayTasksHtml(entry)}
@@ -991,7 +1079,8 @@
         <span class="day-date"><b>${esc(fmtDay(k))}</b>
           <small>${fromKey(k).getFullYear()}</small></span>
         <span class="day-snip">${esc(snippet.slice(0, 140)) || '<i>No notes</i>'}</span>
-        <span class="day-side">${total ? `<span class="stat">${done}/${total}</span>` : ''}
+        <span class="day-side">${minutesWorked(e) !== null ? `<span class="stat" title="Hours worked">${fmtDur(minutesWorked(e))}</span>` : ''}
+          ${total ? `<span class="stat">${done}/${total}</span>` : ''}
           ${e.mood ? `<span class="mood-dot m${e.mood}" title="Mood ${e.mood}/5">${e.mood}</span>` : ''}</span>
       </button></li>`;
     }).join('')}</ul>`;
@@ -1198,6 +1287,33 @@
       + `H${(x + w - rr).toFixed(1)}Q${(x + w).toFixed(1)},${y.toFixed(1)} ${(x + w).toFixed(1)},${(y + rr).toFixed(1)}V${(y + h).toFixed(1)}Z`;
   }
 
+  function hoursChart(days, W) {
+    const vals = days.map((d) => (d.entry ? minutesWorked(d.entry) : null));
+    const maxMin = Math.max(0, ...vals.map((v) => v || 0));
+    if (!maxMin) return '<p class="muted">No work hours logged in this period. Fill in Started and Finished on Today.</p>';
+    const H = 170; const m = { l: 40, r: 8, t: 10, b: 26 };
+    const iw = W - m.l - m.r; const ih = H - m.t - m.b; const step = iw / days.length;
+    const top = niceMax(Math.ceil(maxMin / 60)); const st = tickStep(top);
+    const x = (i) => m.l + step * (i + 0.5);
+    const y = (h) => m.t + (1 - h / top) * ih;
+    let grid = '';
+    for (let v = 0; v <= top; v += st) {
+      grid += `<line class="grid ${v === 0 ? 'base' : ''}" x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/>`
+        + `<text class="ax" x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end">${v}h</text>`;
+    }
+    const bw = Math.max(2, Math.min(18, step * 0.7));
+    const bars = vals.map((v, i) => (v ? `<path class="bar-done" d="${roundedTop(x(i) - bw / 2, y(v / 60), bw, y(0) - y(v / 60), 4)}"/>` : '')).join('');
+    return `
+      <svg class="chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
+        aria-label="Bar chart of hours worked per day over the last ${days.length} days. The table below has the values.">
+        ${grid}
+        <line class="xhair" x1="0" x2="0" y1="${m.t}" y2="${m.t + ih}" visibility="hidden"/>
+        ${bars}
+        ${xAxisLabels(days, x, H - 6)}
+        ${hitColumns(days, m, step, ih)}
+      </svg>`;
+  }
+
   function tasksChart(days, W) {
     const maxSet = Math.max(0, ...days.map((d) => (d.entry ? d.entry.tasks.length : 0)));
     if (!maxSet) return '<p class="muted">No tasks in this period.</p>';
@@ -1249,8 +1365,10 @@
     }
     state.trendDays = days;
     const recorded = days.filter((d) => d.entry);
-    let set = 0; let done = 0; let moodSum = 0; let moodN = 0;
+    let set = 0; let done = 0; let moodSum = 0; let moodN = 0; let workMin = 0; let workDays = 0;
     for (const d of recorded) {
+      const wm = minutesWorked(d.entry);
+      if (wm !== null) { workMin += wm; workDays += 1; }
       set += d.entry.tasks.length;
       done += d.entry.tasks.filter((t) => t.done).length;
       if (d.entry.mood) { moodSum += d.entry.mood; moodN += 1; }
@@ -1267,8 +1385,13 @@
       <div class="tiles">
         <div class="tile"><span class="tile-v">${recorded.length}</span><span class="tile-l">days recorded of ${n}</span></div>
         <div class="tile"><span class="tile-v">${set ? `${Math.round((done / set) * 100)}%` : '—'}</span><span class="tile-l">${set ? `tasks done (${done} of ${set})` : 'no tasks set'}</span></div>
+        <div class="tile"><span class="tile-v">${workDays ? fmtDur(workMin) : '—'}</span><span class="tile-l">${workDays ? `worked (avg ${fmtDur(Math.round(workMin / workDays))}/day)` : 'no hours logged'}</span></div>
         <div class="tile"><span class="tile-v">${moodN ? (moodSum / moodN).toFixed(1) : '—'}</span><span class="tile-l">average mood</span></div>
       </div>
+      <section class="card chart-card">
+        <h3>Hours worked per day</h3>
+        <div class="chart-wrap">${hoursChart(days, chartWidth(1))}<div class="tip" hidden></div></div>
+      </section>
       <div class="grid-2">
       <section class="card chart-card">
         <h3>Mood / energy</h3>
@@ -1291,10 +1414,11 @@
         <summary>Show as a table</summary>
         ${recorded.length ? `
         <div class="table-wrap"><table>
-          <thead><tr><th scope="col">Day</th><th scope="col">Mood</th><th scope="col">Tasks done</th></tr></thead>
+          <thead><tr><th scope="col">Day</th><th scope="col">Hours</th><th scope="col">Mood</th><th scope="col">Tasks done</th></tr></thead>
           <tbody>${recorded.slice().reverse().map((d) => {
             const s = taskStats(d.entry);
-            return `<tr><td>${esc(fmtDay(d.key))}</td><td>${d.entry.mood ? `${d.entry.mood} ${MOODS[d.entry.mood]}` : '—'}</td><td>${s.total ? `${s.done} of ${s.total}` : '—'}</td></tr>`;
+            const wm = minutesWorked(d.entry);
+            return `<tr><td>${esc(fmtDay(d.key))}</td><td>${wm === null ? '—' : fmtDur(wm)}</td><td>${d.entry.mood ? `${d.entry.mood} ${MOODS[d.entry.mood]}` : '—'}</td><td>${s.total ? `${s.done} of ${s.total}` : '—'}</td></tr>`;
           }).join('')}</tbody>
         </table></div>` : '<p class="muted">No days recorded in this period.</p>'}
       </details>`;
@@ -1329,6 +1453,7 @@
     const e = d.entry;
     const s = e ? taskStats(e) : null;
     tip.innerHTML = `<b>${esc(fmtDay(d.key))}</b>${e ? `
+      <span>Hours: ${minutesWorked(e) === null ? '—' : fmtDur(minutesWorked(e))}</span>
       <span>Mood: ${e.mood ? `${e.mood} ${MOODS[e.mood]}` : '—'}</span>
       <span>Tasks: ${s.total ? `${s.done} of ${s.total} done` : 'none'}</span>` : '<span>No entry</span>'}`;
     tip.hidden = false;
@@ -1508,6 +1633,7 @@
     if (e.mood) meta.push(`Mood: ${e.mood}/5 (${MOODS[e.mood]})`);
     if (total) meta.push(`Tasks: ${done} of ${total} done`);
     if (meta.length) L.push(meta.join('    '));
+    if (hoursSummary(e)) L.push(`Hours: ${hoursSummary(e)}${minutesWorked(e) !== null ? ` — ${fmtDur(minutesWorked(e))} worked` : ''}`);
     if (total) {
       L.push('', 'Tasks');
       for (const t of e.tasks) L.push(`  [${t.done ? 'x' : ' '}] ${t.text}${t.priority ? ' (must do)' : ''}${t.carried ? ' (carried over)' : ''}`);
@@ -1707,6 +1833,8 @@
         })),
       ]);
       entry.checkedInAt = Date.now();
+      entry.work = { ...blankEntry(today).work, ...(entry.work || {}) };
+      if (!isTime(entry.work.start)) entry.work.start = nowHHMM();
       state.checkin = null;
       saveEntry(entry);
       flushNow();
@@ -1905,11 +2033,18 @@
       const e = todayEntry();
       if (pending) e.nextTasks.push({ id: uid(), text: pending });
       e.closedAt = e.closedAt || Date.now();
+      e.work = { ...blankEntry(e.date).work, ...(e.work || {}) };
+      if (isTime(e.work.start) && !isTime(e.work.end)) e.work.end = nowHHMM();
       state.editingClose = false;
       state.menu = null;
       saveEntry(e); flushNow(); render();
     },
     'edit-close'() { state.editingClose = true; render(); },
+    'work-now'(el) {
+      const e = todayEntry();
+      e.work = { ...blankEntry(e.date).work, ...(e.work || {}), [el.dataset.which]: nowHHMM() };
+      saveEntry(e); render();
+    },
 
     // settings
     'cfg-save'() {
@@ -1990,6 +2125,14 @@
       const e = todayEntry();
       e[el.dataset.field] = el.value;
       saveEntry(e);
+    } else if (el.dataset.work) {
+      const e = todayEntry();
+      const k = el.dataset.work;
+      const v = k === 'breakMin' ? Math.max(0, Math.min(600, Number(el.value) || 0)) : (isTime(el.value) ? el.value : '');
+      e.work = { ...blankEntry(e.date).work, ...(e.work || {}), [k]: v };
+      saveEntry(e);
+      const t = document.getElementById('work-total');
+      if (t) t.innerHTML = workTotalText(e, minutesSoFar(e));
     } else if ('search' in el.dataset) {
       state.search = el.value;
       document.getElementById('history-list').innerHTML = historyListHtml();
@@ -2128,6 +2271,11 @@
       if (next) { ev.preventDefault(); state.historyDay = next; render(); }
     }
   });
+
+  setInterval(() => {
+    const t = document.getElementById('work-total');
+    if (t && state.tab === 'today') { const e = state.entries[todayKey()]; if (e) t.innerHTML = workTotalText(e, minutesSoFar(e)); }
+  }, 30 * 1000);
 
   if (READONLY) {
     setInterval(() => {

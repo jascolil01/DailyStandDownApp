@@ -4,6 +4,7 @@ A small web app for handing your day over to tomorrow-you.
 
 - **Morning check-in**: a recap of your last entry, the tasks you set for today (must-do tasks first), any tasks you'd set for this date, and a choice of which unfinished tasks to carry over. The first check-in of each week adds a look back at last week.
 - **During the day**: tick tasks off; star must-do tasks; edit, reorder (drag the ⠿ handle or use the ⋯ menu), delete, or move a task to a later date. Tasks that keep getting carried over (3+ days) are flagged with "Do it today", "Move to later" or "Drop it".
+- **Work hours**: log when you started and finished and how long your breaks were (Start my day fills in the start time and standing down fills in the finish time; both can be changed). Today shows hours worked so far; History, exports, Trends and the weekly summaries show hours per day and per week.
 - **Coming up**: tasks set for a specific date, which appear in that day's check-in.
 - **Evening stand-down**: what you got done (one tap copies in your ticked tasks), blockers, a mood/energy rating, and tomorrow's tasks (one tap brings today's unfinished ones along).
 - **History**: every day as a searchable list or a month calendar coloured by mood or tasks done. Export any day or date range as a text file or a printable page (save as PDF from the print dialog).
