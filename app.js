@@ -61,6 +61,7 @@
     trends: '<path d="M4 20V11M10 20V5M16 20v-6M3 20.5h18"/>',
     settings: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/>',
     latest: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/>',
+    pin: '<path d="M9 3.5h6l-1 5.5 3.5 3.5v2h-11v-2L10 9z"/><path d="M12 14.5V21"/>',
   };
   const ic = (name, cls) => `<svg class="ic ${cls || ''}" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">${ICONS[name]}</svg>`;
   const starIcon = (on) => ic('star', on ? 'filled' : '');
@@ -125,6 +126,7 @@
       done: '', blockers: '', notes: '', mood: null,
       nextTasks: [], skippedPlanned: [], scheduled: [], scheduledTaken: [],
       work: { start: '', end: '', breakMin: 0 },
+      dayType: '', log: [], pinned: false,
       closedAt: null, updatedAt: 0,
     };
   }
@@ -169,6 +171,34 @@
     return { min: Math.max(0, d - (Number(w.breakMin) || 0)), live: true };
   }
 
+  const daysBetween = (a, b) => Math.round((fromKey(b) - fromKey(a)) / 86400000);
+
+  // Hours expected on a day: the target on normal working days, none on
+  // weekends (or other days you don't work) and on leave, sick or holidays.
+  function expectedMin(e) {
+    if (!e || isOff(e)) return 0;
+    const st = getMeta().settings;
+    return st.workdays.includes(fromKey(e.date).getDay()) ? Number(st.targetMin) || 0 : 0;
+  }
+
+  // Over (+) or under (-) target for a day with hours logged, else null.
+  function overMin(e) {
+    const w = minutesWorked(e);
+    return w === null ? null : w - expectedMin(e);
+  }
+
+  const fmtSigned = (m) => (m === null || m === undefined ? '—' : m === 0 ? '±0m' : `${m < 0 ? '−' : '+'}${fmtDur(Math.abs(m))}`);
+
+  // Overtime balance between two dates (days with hours logged only).
+  function balance(from, to) {
+    let sum = 0; let n = 0;
+    for (const e of entriesBetween(from, to)) {
+      const o = overMin(e);
+      if (o !== null) { sum += o; n += 1; }
+    }
+    return n ? sum : null;
+  }
+
   function hoursSummary(e) {
     const w = e && e.work;
     if (!w || !isTime(w.start)) return '';
@@ -183,10 +213,38 @@
     return out;
   };
 
-  const sortedKeys = () => Object.keys(state.entries).sort();
+  // One extra synced row (dated 1900-01-01) holds settings, the inbox and the
+  // waiting-on list. It is never treated as a day.
+  const META = '1900-01-01';
+  const sortedKeys = () => Object.keys(state.entries).filter((k) => k !== META).sort();
+  const dayEntries = () => sortedKeys().map((k) => state.entries[k]);
+
+  const DEFAULT_SETTINGS = { targetMin: 480, workdays: [1, 2, 3, 4, 5] };
+  function getMeta() {
+    const m = state.entries[META] || {};
+    return {
+      ...m, date: META,
+      inbox: m.inbox || [], waiting: m.waiting || [],
+      settings: { ...DEFAULT_SETTINGS, ...(m.settings || {}) },
+    };
+  }
+  function saveMeta(m) { saveEntry(m); }
+
+  // ---------- day types ----------
+  const DAY_TYPES = [['', 'Working day'], ['office', 'Office'], ['remote', 'Remote'], ['leave', 'Leave'], ['sick', 'Sick'], ['holiday', 'Public holiday']];
+  const OFF_TYPES = ['leave', 'sick', 'holiday'];
+  const dayTypeLabel = (t) => (DAY_TYPES.find(([k]) => k === t) || ['', ''])[1];
+  const isOff = (e) => !!e && OFF_TYPES.includes(e.dayType);
+  // A day that was only marked as leave/sick/holiday, with nothing written.
+  const isMarkerOnly = (e) => isOff(e) && !e.checkedInAt && !(e.tasks || []).length && !(e.nextTasks || []).length;
+
+  function dayTypeSelectHtml(day, value) {
+    return `<select data-daytype="${day}" aria-label="Day type">${DAY_TYPES.map(([k, label]) =>
+      `<option value="${k}" ${k === (value || '') ? 'selected' : ''}>${label}</option>`).join('')}</select>`;
+  }
 
   function previousEntry(key) {
-    const keys = sortedKeys().filter((k) => k < key);
+    const keys = sortedKeys().filter((k) => k < key && !isMarkerOnly(state.entries[k]));
     return keys.length ? state.entries[keys[keys.length - 1]] : null;
   }
 
@@ -209,13 +267,13 @@
 
   function laterTakenIds() {
     const ids = new Set();
-    for (const e of Object.values(state.entries)) for (const id of e.scheduledTaken || []) ids.add(id);
+    for (const e of dayEntries()) for (const id of e.scheduledTaken || []) ids.add(id);
     return ids;
   }
 
   function allLater() {
     const out = [];
-    for (const e of Object.values(state.entries)) for (const s of e.scheduled || []) out.push({ ...s, from: e.date });
+    for (const e of dayEntries()) for (const s of e.scheduled || []) out.push({ ...s, from: e.date });
     return out.sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0));
   }
 
@@ -268,10 +326,25 @@
     return !READONLY && !!getConfig() && !state.cloud.user;
   }
 
+  // A day with nothing in it at all (used when clearing a leave marker).
+  const isMarkerOnlyBlank = (e) => !e.checkedInAt && !e.tasks.length && !e.nextTasks.length && !e.done && !e.blockers
+    && !(e.log || []).length && !(e.scheduled || []).length && !(e.work && e.work.start);
+
+  async function removeEntry(day) {
+    delete state.entries[day];
+    state.dirty.delete(day);
+    persistLocal();
+    const { client, user } = state.cloud;
+    if (client && user && !state.cloud.offline) {
+      try { await client.from('entries').delete().eq('day', day); } catch { /* removed locally; cloud copy stays until next try */ }
+    }
+  }
+
   function saveEntry(entry) {
     if (READONLY || locked()) return;
     entry.updatedAt = Date.now();
     state.entries[entry.date] = entry;
+    if (entry.date === todayKey()) setTimeout(updateTitle, 0);
     state.dirty.add(entry.date);
     persistLocal();
     scheduleFlush();
@@ -559,7 +632,7 @@
         <div class="top-status">
           ${syncChipHtml()}
           ${who ? `<span class="who" title="${esc(who)}">${esc(who)}</span>` : ''}
-          ${tabs.length ? `<p class="kbd-hint"><kbd>1</kbd>–<kbd>${tabs.length}</kbd> sections${READONLY ? '' : ' · <kbd>N</kbd> new task'}
+          ${tabs.length ? `<p class="kbd-hint"><kbd>1</kbd>–<kbd>${tabs.length}</kbd> sections${READONLY ? '' : ' · <kbd>N</kbd> task · <kbd>I</kbd> inbox · <kbd>L</kbd> log'}
             · <kbd>/</kbd> search · <kbd>←</kbd><kbd>→</kbd> days</p>` : ''}
         </div>
         <nav class="tabs" aria-label="Sections">
@@ -605,6 +678,14 @@
 
   // Full read-only picture of one day, used by History, the shared view and print.
   function dayHtml(entry, split) {
+    if (isMarkerOnly(entry)) {
+      return `
+      <div class="day-meta">
+        <span class="stat off">${esc(dayTypeLabel(entry.dayType))}</span>
+        ${entry.pinned ? `<span class="stat pin-stat">${ic('pin')} Pinned</span>` : ''}
+      </div>
+      <section class="card"><p class="muted">Marked as ${esc(dayTypeLabel(entry.dayType).toLowerCase())}. No hours are expected and nothing was written for this day.</p></section>`;
+    }
     const { total, done } = taskStats(entry);
     const tasks = `
       <section class="card">
@@ -616,7 +697,10 @@
       <div class="day-meta">
         ${total ? `<span class="stat">${done} of ${total} tasks done</span>` : ''}
         ${moodHtml(entry.mood)}
+        ${entry.pinned ? `<span class="stat pin-stat">${ic('pin')} Pinned</span>` : ''}
+        ${entry.dayType ? `<span class="stat ${isOff(entry) ? 'off' : ''}">${esc(dayTypeLabel(entry.dayType))}</span>` : ''}
         ${minutesWorked(entry) !== null ? `<span class="stat" title="${esc(hoursSummary(entry))}">${fmtDur(minutesWorked(entry))} worked</span>` : ''}
+        ${overMin(entry) !== null && expectedMin(entry) ? `<span class="stat" title="Compared with your ${fmtDur(expectedMin(entry))} target">${fmtSigned(overMin(entry))}</span>` : ''}
         ${hoursSummary(entry) ? `<span class="stat subtle">${esc(hoursSummary(entry))}</span>` : ''}
         ${entry.closedAt ? '' : '<span class="stat open">Day not closed out</span>'}
       </div>
@@ -625,6 +709,11 @@
 
   function dayDetailsHtml(entry) {
     return `
+      ${(entry.log || []).length ? `
+      <section class="card">
+        <h3>Work log</h3>
+        ${logListHtml(entry.log, false)}
+      </section>` : ''}
       ${(entry.done || entry.blockers || entry.notes) ? `
       <section class="card">
         <h3>End-of-day stand-down</h3>
@@ -667,6 +756,7 @@
     const end = shiftKey(start, 6);
     const days = entriesBetween(start, end);
     let set = 0; let done = 0; let moodSum = 0; let moodN = 0; let workMin = 0; let workDays = 0;
+    const offDays = days.filter(isOff).length;
     const blockers = []; const stuck = new Map();
     for (const e of days) {
       const wm = minutesWorked(e);
@@ -683,7 +773,10 @@
         }
       }
     }
-    return { start, end, days: days.length, set, done, mood: moodN ? moodSum / moodN : null, workMin, workDays, blockers, stuck: [...stuck.values()] };
+    return {
+      start, end, days: days.filter((e) => !isMarkerOnly(e)).length, set, done, mood: moodN ? moodSum / moodN : null,
+      workMin, workDays, over: balance(start, end), offDays, blockers, stuck: [...stuck.values()],
+    };
   }
 
   function weekCardHtml(w, title) {
@@ -698,6 +791,7 @@
           <div class="tile"><span class="tile-v">${w.days}</span><span class="tile-l">day${w.days === 1 ? '' : 's'} recorded</span></div>
           <div class="tile"><span class="tile-v">${pct === null ? '—' : `${pct}%`}</span><span class="tile-l">${w.set ? `tasks done (${w.done} of ${w.set})` : 'no tasks set'}</span></div>
           <div class="tile"><span class="tile-v">${w.workDays ? fmtDur(w.workMin) : '—'}</span><span class="tile-l">${w.workDays ? `worked (avg ${fmtDur(Math.round(w.workMin / w.workDays))}/day)` : 'no hours logged'}</span></div>
+          <div class="tile"><span class="tile-v">${fmtSigned(w.over)}</span><span class="tile-l">vs target${w.offDays ? ` · ${w.offDays} day${w.offDays === 1 ? '' : 's'} off` : ''}</span></div>
           <div class="tile"><span class="tile-v">${w.mood === null ? '—' : w.mood.toFixed(1)}</span><span class="tile-l">average mood</span></div>
         </div>
         ${w.blockers.length ? `<div class="block"><h4>Blockers</h4><ul class="plain">${w.blockers.slice(-5).map((b) => `
@@ -828,6 +922,7 @@
         then come back this evening to stand down and set tomorrow's tasks.</p>
       </section>`}
       ${lastWeek && lastWeek.days ? weekCardHtml(lastWeek, 'Last week at a glance') : ''}
+      ${waitingHtml(false)}
       </div>
       <div class="col-main">
       <section class="card">
@@ -850,6 +945,14 @@
           <li><label class="check"><input type="checkbox" data-action="checkin-carry" data-key="${esc(t.key)}" ${t.on ? 'checked' : ''}>
             <span class="txt-wrap"><span class="txt">${esc(t.text)}</span>${t.carriedCount - 1 >= 1 ? carriedTag({ carriedCount: t.carriedCount - 1 }) : ''}</span></label>
           </li>`).join('')}</ul>
+      </section>` : ''}
+      ${getMeta().inbox.length ? `
+      <section class="card">
+        <h3>From your inbox</h3>
+        <p class="muted">Tick any you want to do today. The rest stay in the inbox.</p>
+        <ul class="tasks">${getMeta().inbox.map((t) => `
+          <li><label class="check"><input type="checkbox" data-action="checkin-inbox" data-id="${t.id}" ${(state.checkin.inboxOn || []).includes(t.id) ? 'checked' : ''}>
+            <span class="txt-wrap"><span class="txt">${esc(t.text)}</span></span></label></li>`).join('')}</ul>
       </section>` : ''}
       <button class="btn primary big" data-action="checkin-start">Start my day</button>
       <p class="muted small center">Your start time is set when you start your day; you can change it on Today.</p>
@@ -1006,12 +1109,105 @@
           <label class="field"><span>Break (minutes)</span>
             <input type="number" data-work="breakMin" min="0" max="600" step="5" inputmode="numeric" value="${Number(w.breakMin) || 0}"></label>
         </div>
+        <div class="work-foot">
+          <label class="inline-field">Day type ${dayTypeSelectHtml(entry.date, entry.dayType)}</label>
+          <span class="muted small" id="work-target">${targetText(entry)}</span>
+        </div>
+      </section>`;
+  }
+
+  // "1h 25m to go of 8h" / "+35m vs 8h target" / week balance.
+  function targetText(entry) {
+    const parts = [];
+    const exp = expectedMin(entry);
+    const so = minutesSoFar(entry);
+    if (isOff(entry)) parts.push(`${dayTypeLabel(entry.dayType)}: no hours expected`);
+    else if (!exp) parts.push('Not a normal working day: all hours count as extra');
+    else if (so && so.live && so.min < exp) parts.push(`${fmtDur(exp - so.min)} to go of ${fmtDur(exp)}`);
+    else if (so) parts.push(`${fmtSigned(so.min - exp)} vs ${fmtDur(exp)} target`);
+    else parts.push(`Target ${fmtDur(exp)}`);
+    const wk = balance(weekStart(entry.date), entry.date);
+    if (wk !== null) parts.push(`week ${fmtSigned(wk)}`);
+    return esc(parts.join(' · '));
+  }
+
+  // ---------- inbox, waiting on, work log ----------
+
+  function inboxHtml() {
+    const items = getMeta().inbox;
+    return `
+      <section class="card" aria-labelledby="inbox-h">
+        <div class="card-head"><h3 id="inbox-h">Inbox</h3>${items.length ? `<span class="stat">${items.length}</span>` : ''}</div>
+        <p class="muted small">Jot tasks down without deciding when. Move them to today here, or pick them at tomorrow's check-in.</p>
+        ${items.length ? `<ul class="tasks">${items.map((t) => `
+          <li><span class="txt-wrap"><span class="txt">${esc(t.text)}</span></span>
+            <button class="btn small" data-action="inbox-today" data-id="${t.id}">To today</button>
+            <button class="icon" data-action="inbox-remove" data-id="${t.id}" aria-label="Delete from inbox: ${esc(t.text)}">${ic('x')}</button></li>`).join('')}</ul>` : ''}
+        <div class="add-row">
+          <input type="text" data-focus="inbox-add" data-enter="inbox-add" placeholder="Add to inbox" aria-label="Add to inbox" maxlength="300">
+          <button class="btn" data-action="inbox-add">Add</button>
+        </div>
+      </section>`;
+  }
+
+  function waitingAge(since) {
+    const d = daysBetween(since, todayKey());
+    return d <= 0 ? 'since today' : `${d} day${d === 1 ? '' : 's'}`;
+  }
+
+  function waitingHtml(withAdd) {
+    const items = getMeta().waiting.filter((w) => !w.done);
+    if (!withAdd && !items.length) return '';
+    return `
+      <section class="card" aria-labelledby="waiting-h">
+        <div class="card-head"><h3 id="waiting-h">${withAdd ? 'Waiting on' : 'Still waiting on'}</h3>${items.length ? `<span class="stat">${items.length}</span>` : ''}</div>
+        ${items.length ? `<ul class="tasks">${items.map((w) => {
+          const age = daysBetween(w.since, todayKey());
+          return `
+          <li><span class="txt-wrap"><span class="txt">${esc(w.what)}</span>
+              ${w.who ? `<span class="tag">${esc(w.who)}</span>` : ''}
+              <span class="tag ${age >= 5 ? 'warn' : ''}" title="Since ${esc(fmtDay(w.since))}">${waitingAge(w.since)}</span></span>
+            <button class="btn small" data-action="waiting-done" data-id="${w.id}">Received</button>
+            ${withAdd ? `<button class="icon" data-action="waiting-remove" data-id="${w.id}" aria-label="Delete: ${esc(w.what)}">${ic('x')}</button>` : ''}</li>`;
+        }).join('')}</ul>` : '<p class="muted small">Nothing outstanding. Add things you are waiting for from other people.</p>'}
+        ${withAdd ? `
+        <div class="add-row wrap waiting-add">
+          <input type="text" data-focus="waiting-what" data-enter="waiting-add" placeholder="What are you waiting for?" aria-label="What are you waiting for?" maxlength="300">
+          <input type="text" data-focus="waiting-who" data-enter="waiting-add" placeholder="From (optional)" aria-label="From whom" maxlength="120">
+          <button class="btn" data-action="waiting-add">Add</button>
+        </div>` : ''}
+      </section>`;
+  }
+
+  function logListHtml(log, editable) {
+    if (!log || !log.length) return '';
+    const sorted = log.slice().sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    return `<ul class="log">${sorted.map((l) => `
+      <li><span class="log-time">${esc(fmtTime(l.at))}</span><span class="txt">${esc(l.text)}</span>
+        ${editable ? `<button class="icon" data-action="log-remove" data-id="${l.id}" aria-label="Delete log entry: ${esc(l.text)}">${ic('x')}</button>` : ''}</li>`).join('')}</ul>`;
+  }
+
+  function logCardHtml(entry) {
+    return `
+      <section class="card" aria-labelledby="log-h">
+        <div class="card-head"><h3 id="log-h">Work log</h3>${(entry.log || []).length ? `<span class="stat">${entry.log.length}</span>` : ''}</div>
+        ${logListHtml(entry.log, true) || '<p class="muted small">Quick notes as the day goes: calls, decisions, who said what. The time is added for you.</p>'}
+        <div class="add-row">
+          <input type="text" data-focus="log-add" data-enter="log-add" placeholder="What happened?" aria-label="Add to work log" maxlength="500">
+          <button class="btn" data-action="log-add">Log</button>
+        </div>
       </section>`;
   }
 
   function workTotalText(entry, so) {
     if (!so) return '<span class="muted">Not started</span>';
     return `<b>${fmtDur(so.min)}</b> ${so.live ? 'so far' : 'worked'}`;
+  }
+
+  function pinButtonHtml(entry) {
+    if (READONLY) return '';
+    return `<button class="btn small ${entry.pinned ? 'on' : ''}" data-action="pin-day" data-day="${entry.date}" aria-pressed="${!!entry.pinned}"
+      title="Pin this day so it's easy to find in History">${ic('pin')} ${entry.pinned ? 'Pinned' : 'Pin day'}</button>`;
   }
 
   function closedHtml(entry) {
@@ -1039,7 +1235,7 @@
     return `
       <div class="hero">
         <p class="eyebrow">${esc(fmtDate(today))}</p>
-        <h2>Today</h2>
+        <div class="hero-row"><h2>Today</h2>${pinButtonHtml(entry)}</div>
       </div>
       <div class="cols">
         <div class="col-main">
@@ -1048,9 +1244,12 @@
           ${staleHtml(entry)}
           ${todayTasksHtml(entry)}
           ${comingUpHtml()}
+          ${inboxHtml()}
         </div>
         <div class="col-side">
           ${prev ? `<details class="card" data-details="recapOpen" ${(state.recapOpen ?? isDesktop()) ? 'open' : ''}><summary>Recap of ${esc(relDay(prev.date))}</summary>${recapHtml(prev)}</details>` : ''}
+          ${waitingHtml(true)}
+          ${logCardHtml(entry)}
           ${entry.closedAt && !state.editingClose ? closedHtml(entry) : standdownFormHtml(entry)}
         </div>
       </div>`;
@@ -1062,24 +1261,28 @@
     if (!q) return true;
     const hay = [entry.done, entry.blockers, entry.notes, fmtDate(entry.date),
       ...entry.tasks.map((t) => t.text), ...entry.nextTasks.map((t) => t.text),
-      ...(entry.scheduled || []).map((t) => t.text)].join('\n').toLowerCase();
+      ...(entry.scheduled || []).map((t) => t.text), ...(entry.log || []).map((l) => l.text), dayTypeLabel(entry.dayType)].join('\n').toLowerCase();
     return hay.includes(q.toLowerCase());
   }
 
   function historyListHtml() {
-    const keys = sortedKeys().reverse().filter((k) => matchesSearch(state.entries[k], state.search.trim()));
+    const keys = sortedKeys().reverse()
+      .filter((k) => matchesSearch(state.entries[k], state.search.trim()))
+      .filter((k) => state.histFilter !== 'pinned' || state.entries[k].pinned);
     if (!keys.length) {
-      return `<p class="muted pad">${sortedKeys().length ? 'No days match that search.' : 'No days recorded yet.'}</p>`;
+      return `<p class="muted pad">${state.histFilter === 'pinned' && !state.search.trim() ? 'No pinned days yet. Use "Pin day" on Today or on any day here.'
+        : sortedKeys().length ? 'No days match that search.' : 'No days recorded yet.'}</p>`;
     }
     return `<ul class="days">${keys.map((k) => {
       const e = state.entries[k];
       const { total, done } = taskStats(e);
-      const snippet = (e.done || e.notes || e.blockers || e.tasks.map((t) => t.text).join(', ')).trim();
+      const snippet = (e.done || e.notes || e.blockers || e.tasks.map((t) => t.text).join(', ') || (isOff(e) ? dayTypeLabel(e.dayType) : '')).trim();
       return `<li><button class="day-row ${k === activeHistoryDay() ? 'active' : ''}" data-action="open-day" data-day="${k}" ${k === activeHistoryDay() ? 'aria-current="true"' : ''}>
-        <span class="day-date"><b>${esc(fmtDay(k))}</b>
+        <span class="day-date"><b>${e.pinned ? `<span class="pin-mark" title="Pinned">${ic('pin')}</span>` : ''}${esc(fmtDay(k))}</b>
           <small>${fromKey(k).getFullYear()}</small></span>
         <span class="day-snip">${esc(snippet.slice(0, 140)) || '<i>No notes</i>'}</span>
-        <span class="day-side">${minutesWorked(e) !== null ? `<span class="stat" title="Hours worked">${fmtDur(minutesWorked(e))}</span>` : ''}
+        <span class="day-side">${e.dayType ? `<span class="stat ${isOff(e) ? 'off' : ''}">${esc(dayTypeLabel(e.dayType))}</span>` : ''}
+          ${minutesWorked(e) !== null ? `<span class="stat" title="Hours worked">${fmtDur(minutesWorked(e))}</span>` : ''}
           ${total ? `<span class="stat">${done}/${total}</span>` : ''}
           ${e.mood ? `<span class="mood-dot m${e.mood}" title="Mood ${e.mood}/5">${e.mood}</span>` : ''}</span>
       </button></li>`;
@@ -1095,7 +1298,7 @@
     return Math.min(5, Math.floor((done / total) * 5) + 1);
   }
 
-  const hasMoods = () => Object.values(state.entries).some((e) => e.mood);
+  const hasMoods = () => dayEntries().some((e) => e.mood);
 
   function calendarHtml() {
     const month = state.calMonth || todayKey().slice(0, 7);
@@ -1114,12 +1317,18 @@
       const key = `${month}-${pad(d)}`;
       const e = state.entries[key];
       const lv = calLevel(e, by);
-      const cls = `cal-day ${lv ? `lv${lv}` : e ? 'has-entry' : 'empty'} ${key === today ? 'is-today' : ''} ${key === activeHistoryDay() ? 'is-selected' : ''}`;
-      if (e) {
+      const cls = `cal-day ${isOff(e) ? 'off' : lv ? `lv${lv}` : e ? 'has-entry' : 'empty'} ${key === today ? 'is-today' : ''} ${key === activeHistoryDay() ? 'is-selected' : ''} ${e && e.pinned ? 'pinned' : ''} ${key === state.calPick ? 'is-picking' : ''}`;
+      if (e && isMarkerOnly(e)) {
+        const label = `${fmtDate(key, { weekday: 'long', month: 'long', day: 'numeric' })}, ${dayTypeLabel(e.dayType)}`;
+        cells += READONLY ? `<span class="${cls}" title="${esc(label)}" aria-label="${esc(label)}">${d}</span>`
+          : `<button class="${cls}" data-action="cal-pick" data-day="${key}" aria-label="${esc(label)}" title="${esc(label)}">${d}</button>`;
+      } else if (e) {
         const { total, done } = taskStats(e);
         const label = [fmtDate(key, { weekday: 'long', month: 'long', day: 'numeric' }),
           e.mood ? `mood ${e.mood} of 5 (${MOODS[e.mood]})` : '', total ? `${done} of ${total} tasks done` : ''].filter(Boolean).join(', ');
         cells += `<button class="${cls}" data-action="open-day" data-day="${key}" aria-label="${esc(label)}" title="${esc(label)}">${d}</button>`;
+      } else if (!READONLY) {
+        cells += `<button class="${cls}" data-action="cal-pick" data-day="${key}" aria-label="${esc(fmtDate(key, { weekday: 'long', month: 'long', day: 'numeric' }))}: no entry" title="No entry. Click to mark as leave, sick or holiday">${d}</button>`;
       } else {
         cells += `<span class="${cls}">${d}</span>`;
       }
@@ -1145,7 +1354,21 @@
         <div class="legend">
           ${legend.map(([lv, label]) => `<span class="legend-item"><span class="swatch lv${lv}"></span>${esc(label)}</span>`).join('')}
           <span class="legend-item"><span class="swatch has-entry"></span>Recorded, no ${by === 'mood' ? 'mood' : 'tasks'}</span>
+          <span class="legend-item"><span class="swatch off"></span>Leave, sick or holiday</span>
         </div>
+        ${!READONLY && state.calPick ? (() => {
+          const e = state.entries[state.calPick];
+          return `
+        <div class="cal-pick" role="group" aria-label="Mark ${esc(fmtDay(state.calPick))}">
+          <p><b>${esc(fmtDate(state.calPick, { weekday: 'long', month: 'long', day: 'numeric' }))}</b>
+            ${e ? `is marked as ${esc(dayTypeLabel(e.dayType))}.` : 'has no entry.'} Mark it as:</p>
+          <div class="row">
+            ${OFF_TYPES.map((t) => `<button class="btn small ${e && e.dayType === t ? 'on' : ''}" data-action="mark-day" data-type="${t}">${dayTypeLabel(t)}</button>`).join('')}
+            ${e ? '<button class="btn small" data-action="mark-day" data-type="">Clear</button>' : ''}
+            <button class="btn small link" data-action="cal-pick" data-day="${state.calPick}">Cancel</button>
+          </div>
+        </div>`;
+        })() : ''}
       </section>`;
   }
 
@@ -1178,16 +1401,22 @@
         <div class="row">
           <button class="btn primary" data-action="export-pdf" ${count ? '' : 'disabled'}>Print or save as PDF</button>
           <button class="btn" data-action="export-txt" ${count ? '' : 'disabled'}>${ic('download')} Download text file</button>
+          <button class="btn" data-action="export-csv">${ic('download')} Timesheet (CSV)</button>
         </div>
       </section>`;
+  }
+
+  // Latest day with something in it (skips days only marked as leave etc.).
+  function latestRealDay() {
+    const keys = sortedKeys().filter((k) => !isMarkerOnly(state.entries[k]));
+    return keys[keys.length - 1] || null;
   }
 
   // The day shown in History: the one picked, or on desktop the latest day.
   function activeHistoryDay() {
     if (state.historyDay && state.entries[state.historyDay]) return state.historyDay;
     if (!isDesktop()) return null;
-    const keys = sortedKeys();
-    return keys[keys.length - 1] || null;
+    return latestRealDay();
   }
 
   function historyDayHtml(day, withBack) {
@@ -1202,7 +1431,11 @@
         <button class="btn" data-action="open-day" data-day="${newer || ''}" ${newer ? '' : 'disabled'} aria-label="Newer day" title="Newer day (→)">Newer ${ic('chev-right')}</button>
       </div>
       <div class="hero hero-row"><h2>${esc(fmtDate(day))}</h2>
-        <button class="btn small" data-action="export-open" data-day="${day}">Export</button></div>
+        <div class="row">
+          ${READONLY ? '' : `${pinButtonHtml(state.entries[day])}
+          <label class="inline-field sr-label"><span class="sr">Day type</span>${dayTypeSelectHtml(day, state.entries[day].dayType)}</label>`}
+          <button class="btn small" data-action="export-open" data-day="${day}">Export</button>
+        </div></div>
       ${withBack ? exportPanelHtml() : ''}
       ${dayHtml(state.entries[day])}`;
   }
@@ -1219,7 +1452,13 @@
         <button class="seg-btn ${state.histView === 'calendar' ? 'on' : ''}" data-action="hist-view" data-view="calendar" aria-pressed="${state.histView === 'calendar'}">Calendar</button>
       </div>
       ${state.histView === 'calendar' ? calendarHtml() : `
-      <input type="search" class="search" data-search placeholder="Search past days" aria-label="Search past days" value="${esc(state.search)}">
+      <div class="search-row">
+        <input type="search" class="search" data-search placeholder="Search past days" aria-label="Search past days" value="${esc(state.search)}">
+        <div class="seg" role="group" aria-label="Show">
+          <button class="seg-btn ${state.histFilter !== 'pinned' ? 'on' : ''}" data-action="hist-filter" data-filter="all" aria-pressed="${state.histFilter !== 'pinned'}">All</button>
+          <button class="seg-btn ${state.histFilter === 'pinned' ? 'on' : ''}" data-action="hist-filter" data-filter="pinned" aria-pressed="${state.histFilter === 'pinned'}">${ic('pin')} Pinned</button>
+        </div>
+      </div>
       <div id="history-list">${historyListHtml()}</div>`}`;
     if (!desk) return listPane;
     const day = activeHistoryDay();
@@ -1289,8 +1528,10 @@
 
   function hoursChart(days, W) {
     const vals = days.map((d) => (d.entry ? minutesWorked(d.entry) : null));
-    const maxMin = Math.max(0, ...vals.map((v) => v || 0));
-    if (!maxMin) return '<p class="muted">No work hours logged in this period. Fill in Started and Finished on Today.</p>';
+    const targetMin = Number(getMeta().settings.targetMin) || 0;
+    const loggedMax = Math.max(0, ...vals.map((v) => v || 0));
+    const maxMin = Math.max(loggedMax, targetMin);
+    if (!loggedMax) return '<p class="muted">No work hours logged in this period. Fill in Started and Finished on Today.</p>';
     const H = 170; const m = { l: 40, r: 8, t: 10, b: 26 };
     const iw = W - m.l - m.r; const ih = H - m.t - m.b; const step = iw / days.length;
     const top = niceMax(Math.ceil(maxMin / 60)); const st = tickStep(top);
@@ -1303,15 +1544,121 @@
     }
     const bw = Math.max(2, Math.min(18, step * 0.7));
     const bars = vals.map((v, i) => (v ? `<path class="bar-done" d="${roundedTop(x(i) - bw / 2, y(v / 60), bw, y(0) - y(v / 60), 4)}"/>` : '')).join('');
+    const tY = y(targetMin / 60);
+    const target = targetMin ? `<line class="target" x1="${m.l}" x2="${W - m.r}" y1="${tY}" y2="${tY}"/>
+      <text class="ax target-label" x="${m.l + 6}" y="${tY - 5}">target ${fmtDur(targetMin)}</text>` : '';
     return `
       <svg class="chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
         aria-label="Bar chart of hours worked per day over the last ${days.length} days. The table below has the values.">
         ${grid}
         <line class="xhair" x1="0" x2="0" y1="${m.t}" y2="${m.t + ih}" visibility="hidden"/>
         ${bars}
+        ${target}
         ${xAxisLabels(days, x, H - 6)}
         ${hitColumns(days, m, step, ih)}
       </svg>`;
+  }
+
+  function balanceCardHtml(today) {
+    const y = today.slice(0, 4);
+    const rows = [
+      ['This week', balance(weekStart(today), today)],
+      ['This month', balance(`${today.slice(0, 7)}-01`, today)],
+      ['This year', balance(`${y}-01-01`, today)],
+    ];
+    const st = getMeta().settings;
+    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const wd = [1, 2, 3, 4, 5, 6, 0].filter((d) => st.workdays.includes(d)).map((d) => names[d]).join(', ') || 'no days';
+    return `
+      <section class="card" aria-labelledby="bal-h">
+        <div class="card-head"><h3 id="bal-h">Overtime balance</h3>
+          <span class="muted small">Target ${fmtDur(st.targetMin)} on ${esc(wd)}${READONLY ? '' : ' · change in Settings'}</span></div>
+        <div class="tiles">${rows.map(([label, v]) => `
+          <div class="tile"><span class="tile-v ${v > 0 ? 'pos' : v < 0 ? 'neg' : ''}">${fmtSigned(v)}</span><span class="tile-l">${label}</span></div>`).join('')}
+        </div>
+      </section>`;
+  }
+
+  // Year at a glance: one square per day, Monday-first weeks.
+  function heatLevel(e, by) {
+    if (!e) return 0;
+    if (by === 'tasks') return calLevel(e, 'tasks');
+    const m = minutesWorked(e);
+    if (m === null) return 0;
+    return m < 240 ? 1 : m < 360 ? 2 : m < 480 ? 3 : m < 600 ? 4 : 5;
+  }
+
+  function heatmapHtml() {
+    const year = state.heatYear || Number((READONLY ? (sortedKeys().slice(-1)[0] || todayKey()) : todayKey()).slice(0, 4));
+    const by = state.heatBy || 'hours';
+    const jan1 = new Date(year, 0, 1);
+    const start = shiftKey(toKey(jan1), -((jan1.getDay() + 6) % 7));
+    const cell = 12; const gap = 3; const left = 30; const top = 18; const stepPx = cell + gap;
+    let rects = ''; let months = ''; let lastMonth = -1;
+    for (let col = 0; col < 54; col++) {
+      for (let row = 0; row < 7; row++) {
+        const k = shiftKey(start, col * 7 + row);
+        if (Number(k.slice(0, 4)) !== year) continue;
+        const e = state.entries[k];
+        const mo = Number(k.slice(5, 7)) - 1;
+        if (row === 0 && mo !== lastMonth) {
+          months += `<text class="ax" x="${left + col * stepPx}" y="11">${new Date(year, mo, 1).toLocaleDateString(undefined, { month: 'short' })}</text>`;
+          lastMonth = mo;
+        }
+        const lv = heatLevel(e, by);
+        const cls = isOff(e) ? 'off' : lv ? `lv${lv}` : e && !isMarkerOnly(e) ? 'has' : 'none';
+        const wm = minutesWorked(e);
+        const st = e ? taskStats(e) : null;
+        const tip = [fmtDate(k, { weekday: 'short', month: 'short', day: 'numeric' }),
+          isOff(e) ? dayTypeLabel(e.dayType) : '',
+          wm !== null ? `${fmtDur(wm)} worked` : '', st && st.total ? `${st.done} of ${st.total} tasks` : '',
+          e && e.pinned ? 'pinned' : ''].filter(Boolean).join(' · ');
+        rects += `<rect class="${cls} ${k === todayKey() ? 'today' : ''}" x="${left + col * stepPx}" y="${top + row * stepPx}" width="${cell}" height="${cell}" rx="2.5"
+          ${e && !isMarkerOnly(e) ? `data-action="open-heat" data-day="${k}"` : ''}><title>${esc(tip)}</title></rect>`;
+      }
+    }
+    const dayLabels = [['Mon', 0], ['Wed', 2], ['Fri', 4]].map(([t, r]) => `<text class="ax" x="0" y="${top + r * stepPx + 10}">${t}</text>`).join('');
+    const W = left + 54 * stepPx; const H = top + 7 * stepPx;
+    const legend = by === 'tasks'
+      ? [[1, '0–19%'], [3, '40–59%'], [5, '80–100%']]
+      : [[1, '<4h'], [2, '4–6h'], [3, '6–8h'], [4, '8–10h'], [5, '10h+']];
+    return `
+      <section class="card" aria-labelledby="heat-h">
+        <div class="card-head">
+          <h3 id="heat-h">Year at a glance</h3>
+          <div class="row">
+            <div class="seg" role="group" aria-label="Colour by">
+              <button class="seg-btn ${by === 'hours' ? 'on' : ''}" data-action="heat-by" data-by="hours" aria-pressed="${by === 'hours'}">Hours</button>
+              <button class="seg-btn ${by === 'tasks' ? 'on' : ''}" data-action="heat-by" data-by="tasks" aria-pressed="${by === 'tasks'}">Tasks done</button>
+            </div>
+            <button class="icon" data-action="heat-year" data-year="${year - 1}" aria-label="Previous year">${ic('chev-left')}</button>
+            <b class="tabnum">${year}</b>
+            <button class="icon" data-action="heat-year" data-year="${year + 1}" aria-label="Next year">${ic('chev-right')}</button>
+          </div>
+        </div>
+        <div class="heat-wrap"><svg class="heat" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
+          aria-label="Calendar heatmap of ${year}, coloured by ${by === 'hours' ? 'hours worked' : 'share of tasks done'}. Hover a square for details.">
+          ${months}${dayLabels}${rects}</svg></div>
+        <div class="legend">
+          ${legend.map(([lv, label]) => `<span class="legend-item"><span class="swatch lv${lv}"></span>${label}</span>`).join('')}
+          <span class="legend-item"><span class="swatch off"></span>Leave, sick or holiday</span>
+          <span class="legend-item"><span class="swatch none"></span>No entry</span>
+        </div>
+      </section>`;
+  }
+
+  function reportsCardHtml() {
+    const month = state.reportMonth || todayKey().slice(0, 7);
+    return `
+      <section class="card" aria-labelledby="rep-h">
+        <h3 id="rep-h">Reports</h3>
+        <p class="muted">A monthly summary to print or save as PDF, or a timesheet to open in Excel.</p>
+        <div class="row">
+          <label class="inline-field">Month <input type="month" id="report-month" value="${month}"></label>
+          <button class="btn primary" data-action="report-print">Monthly report</button>
+          <button class="btn" data-action="report-csv">${ic('download')} Timesheet (CSV)</button>
+        </div>
+      </section>`;
   }
 
   function tasksChart(days, W) {
@@ -1364,7 +1711,7 @@
       days.push({ key, entry: state.entries[key] || null });
     }
     state.trendDays = days;
-    const recorded = days.filter((d) => d.entry);
+    const recorded = days.filter((d) => d.entry && !isMarkerOnly(d.entry));
     let set = 0; let done = 0; let moodSum = 0; let moodN = 0; let workMin = 0; let workDays = 0;
     for (const d of recorded) {
       const wm = minutesWorked(d.entry);
@@ -1388,6 +1735,7 @@
         <div class="tile"><span class="tile-v">${workDays ? fmtDur(workMin) : '—'}</span><span class="tile-l">${workDays ? `worked (avg ${fmtDur(Math.round(workMin / workDays))}/day)` : 'no hours logged'}</span></div>
         <div class="tile"><span class="tile-v">${moodN ? (moodSum / moodN).toFixed(1) : '—'}</span><span class="tile-l">average mood</span></div>
       </div>
+      ${balanceCardHtml(today)}
       <section class="card chart-card">
         <h3>Hours worked per day</h3>
         <div class="chart-wrap">${hoursChart(days, chartWidth(1))}<div class="tip" hidden></div></div>
@@ -1410,15 +1758,17 @@
       ${thisWeek.days ? weekCardHtml(thisWeek, READONLY ? 'Latest week' : 'This week so far') : ''}
       ${lastWeek.days ? weekCardHtml(lastWeek, READONLY ? 'Week before' : 'Last week') : ''}
       </div>
+      ${heatmapHtml()}
+      ${READONLY ? '' : reportsCardHtml()}
       <details class="card">
         <summary>Show as a table</summary>
         ${recorded.length ? `
         <div class="table-wrap"><table>
-          <thead><tr><th scope="col">Day</th><th scope="col">Hours</th><th scope="col">Mood</th><th scope="col">Tasks done</th></tr></thead>
+          <thead><tr><th scope="col">Day</th><th scope="col">Type</th><th scope="col">Hours</th><th scope="col">vs target</th><th scope="col">Mood</th><th scope="col">Tasks done</th></tr></thead>
           <tbody>${recorded.slice().reverse().map((d) => {
             const s = taskStats(d.entry);
             const wm = minutesWorked(d.entry);
-            return `<tr><td>${esc(fmtDay(d.key))}</td><td>${wm === null ? '—' : fmtDur(wm)}</td><td>${d.entry.mood ? `${d.entry.mood} ${MOODS[d.entry.mood]}` : '—'}</td><td>${s.total ? `${s.done} of ${s.total}` : '—'}</td></tr>`;
+            return `<tr><td>${esc(fmtDay(d.key))}</td><td>${esc(dayTypeLabel(d.entry.dayType) || '—')}</td><td>${wm === null ? '—' : fmtDur(wm)}</td><td>${expectedMin(d.entry) || wm ? fmtSigned(overMin(d.entry)) : '—'}</td><td>${d.entry.mood ? `${d.entry.mood} ${MOODS[d.entry.mood]}` : '—'}</td><td>${s.total ? `${s.done} of ${s.total}` : '—'}</td></tr>`;
           }).join('')}</tbody>
         </table></div>` : '<p class="muted">No days recorded in this period.</p>'}
       </details>`;
@@ -1482,7 +1832,7 @@
     if (!keys.length) {
       return '<section class="card"><h3>Nothing to show</h3><p>There are no entries yet, or this read-only link has been turned off by its owner.</p></section>';
     }
-    const k = keys[keys.length - 1];
+    const k = latestRealDay() || keys[keys.length - 1];
     return `
       <div class="hero">
         <p class="eyebrow">Latest entry</p>
@@ -1574,11 +1924,28 @@
       </section>
       </div>
       <div class="col-side">
+      ${READONLY ? '' : (() => {
+        const st = getMeta().settings;
+        const names = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
+        return `
+      <section class="card" aria-labelledby="hours-h">
+        <h3 id="hours-h">Working hours</h3>
+        <p class="muted">Used for "to go" on Today and for overtime in Trends, reports and timesheets.</p>
+        <label class="field"><span>Target hours per day</span>
+          <input type="number" id="set-target" min="0" max="24" step="0.25" value="${(st.targetMin / 60).toString()}" style="max-width:140px"></label>
+        <fieldset class="hide-opts"><legend>Days you normally work</legend>
+          <div class="row">${names.map(([d, n]) => `<label class="check day-check"><input type="checkbox" data-workday="${d}" ${st.workdays.includes(d) ? 'checked' : ''}> ${n}</label>`).join('')}</div>
+        </fieldset>
+        <div><button class="btn primary" data-action="save-target">Save working hours</button></div>
+      </section>`;
+      })()}
       <section class="card">
         <h3>Keyboard shortcuts</h3>
         <table class="shortcuts"><tbody>
           <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></td><td>Today, History, Trends, Settings</td></tr>
           <tr><td><kbd>N</kbd></td><td>Add a task (on Today)</td></tr>
+          <tr><td><kbd>I</kbd></td><td>Add to the inbox</td></tr>
+          <tr><td><kbd>L</kbd></td><td>Add to the work log</td></tr>
           <tr><td><kbd>/</kbd></td><td>Search History</td></tr>
           <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Older / newer day in History</td></tr>
           <tr><td><kbd>Enter</kbd></td><td>Add what you typed</td></tr>
@@ -1589,8 +1956,23 @@
       </div>`;
   }
 
+  // Browser tab shows tasks left and hours so far, e.g. "3 left · 4h 12m".
+  function updateTitle() {
+    let t = 'Daily Stand-Down';
+    if (!READONLY && !locked()) {
+      const e = state.entries[todayKey()];
+      if (e && e.checkedInAt) {
+        const left = e.tasks.filter((x) => !x.done).length;
+        const so = minutesSoFar(e);
+        t = `${left ? `${left} left` : 'All done'}${so ? ` · ${fmtDur(so.min)}` : ''} — Stand-Down`;
+      }
+    }
+    if (document.title !== t) document.title = t;
+  }
+
   function render() {
     state.renderedDay = todayKey();
+    updateTitle();
     const waiting = !READONLY && state.cloud.user && !state.cloud.pulled && state.tab === 'today';
     const body = locked() ? gateHtml()
       : waiting ? '<p class="muted pad">Loading your latest entries…</p>'
@@ -1633,7 +2015,12 @@
     if (e.mood) meta.push(`Mood: ${e.mood}/5 (${MOODS[e.mood]})`);
     if (total) meta.push(`Tasks: ${done} of ${total} done`);
     if (meta.length) L.push(meta.join('    '));
-    if (hoursSummary(e)) L.push(`Hours: ${hoursSummary(e)}${minutesWorked(e) !== null ? ` — ${fmtDur(minutesWorked(e))} worked` : ''}`);
+    if (e.dayType) L.push(`Day type: ${dayTypeLabel(e.dayType)}${e.pinned ? '    (pinned)' : ''}`);
+    else if (e.pinned) L.push('(pinned)');
+    if (hoursSummary(e)) {
+      const o = overMin(e);
+      L.push(`Hours: ${hoursSummary(e)}${minutesWorked(e) !== null ? ` — ${fmtDur(minutesWorked(e))} worked` : ''}${o !== null && expectedMin(e) ? ` (${fmtSigned(o)} vs ${fmtDur(expectedMin(e))} target)` : ''}`);
+    }
     if (total) {
       L.push('', 'Tasks');
       for (const t of e.tasks) L.push(`  [${t.done ? 'x' : ' '}] ${t.text}${t.priority ? ' (must do)' : ''}${t.carried ? ' (carried over)' : ''}`);
@@ -1643,6 +2030,10 @@
       L.push('', title);
       for (const line of text.trim().split('\n')) L.push(`  ${line}`);
     };
+    if ((e.log || []).length) {
+      L.push('', 'Work log');
+      for (const l of e.log.slice().sort((a, b) => (a.at < b.at ? -1 : 1))) L.push(`  ${fmtTime(l.at)}  ${l.text}`);
+    }
     block('What got done', e.done);
     block('Blockers / problems', e.blockers);
     block('Notes to tomorrow-me', e.notes);
@@ -1666,6 +2057,77 @@
     const days = entriesBetween(from, to);
     const text = [`DAILY STAND-DOWN — ${rangeTitle(from, to)}`, '', ...days.map((e) => `${entryText(e)}\n\n${'-'.repeat(40)}\n`)].join('\n');
     downloadFile(`stand-down-${from}${from === to ? '' : `-to-${to}`}.txt`, text, 'text/plain');
+  }
+
+  const csvCell = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const hrs = (m) => (m === null || m === undefined ? '' : (m / 60).toFixed(2));
+
+  // One row per calendar day in the range, ready for Excel.
+  function timesheetCsv(from, to) {
+    const rows = [['Date', 'Weekday', 'Day type', 'Start', 'Finish', 'Break (min)', 'Hours', 'Target hours', 'Over/under (hours)', 'Tasks done', 'Tasks set']];
+    for (let k = from; k <= to; k = shiftKey(k, 1)) {
+      const e = state.entries[k];
+      const probe = e || { date: k };
+      const w = (e && e.work) || {};
+      const m = minutesWorked(e);
+      const st = e ? taskStats(e) : { total: 0, done: 0 };
+      rows.push([k, fmtDate(k, { weekday: 'long' }), e ? dayTypeLabel(e.dayType) || '' : '', w.start || '', w.end || '',
+        w.start ? Number(w.breakMin) || 0 : '', hrs(m), hrs(expectedMin(probe)), m === null ? '' : hrs(overMin(e)),
+        e ? st.done : '', e ? st.total : '']);
+    }
+    const total = entriesBetween(from, to).reduce((a, e) => a + (minutesWorked(e) || 0), 0);
+    rows.push([]);
+    rows.push(['Total', '', '', '', '', '', hrs(total), '', hrs(balance(from, to) ?? 0)]);
+    const csv = '\ufeff' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+    downloadFile(`timesheet-${from}-to-${to}.csv`, csv, 'text/csv');
+  }
+
+  const currentReportMonth = () => {
+    const el = document.getElementById('report-month');
+    const v = el && /^\d{4}-\d{2}$/.test(el.value) ? el.value : (state.reportMonth || todayKey().slice(0, 7));
+    state.reportMonth = v;
+    return v;
+  };
+
+  function reportPrint(month) {
+    const [y, mo] = month.split('-').map(Number);
+    const from = `${month}-01`; const to = toKey(new Date(y, mo, 0));
+    const days = entriesBetween(from, to);
+    const worked = days.filter((e) => minutesWorked(e) !== null);
+    const totalMin = worked.reduce((a, e) => a + minutesWorked(e), 0);
+    const off = days.filter(isOff);
+    let set = 0; let done = 0; let moodSum = 0; let moodN = 0;
+    for (const e of days) { set += e.tasks.length; done += e.tasks.filter((t) => t.done).length; if (e.mood) { moodSum += e.mood; moodN += 1; } }
+    const blockers = days.filter((e) => e.blockers && e.blockers.trim());
+    const pinned = days.filter((e) => e.pinned);
+    const title = new Date(y, mo - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    const tile = (v, l) => `<div class="tile"><span class="tile-v">${v}</span><span class="tile-l">${l}</span></div>`;
+    $print.innerHTML = `
+      <div class="report">
+        <h1>Monthly report — ${esc(title)}</h1>
+        <p class="muted">Daily Stand-Down · generated ${esc(new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }))}</p>
+        <div class="tiles">
+          ${tile(worked.length, 'days worked')}
+          ${tile(fmtDur(totalMin), 'hours worked')}
+          ${tile(fmtSigned(balance(from, to)), 'vs target')}
+          ${tile(off.length, 'days off (leave, sick, holiday)')}
+          ${tile(set ? `${Math.round((done / set) * 100)}%` : '—', `tasks done (${done} of ${set})`)}
+          ${tile(moodN ? (moodSum / moodN).toFixed(1) : '—', 'average mood')}
+        </div>
+        <h2>Hours</h2>
+        <table><thead><tr><th>Date</th><th>Type</th><th>Start</th><th>Finish</th><th>Break</th><th>Hours</th><th>vs target</th><th>Tasks</th></tr></thead>
+          <tbody>${days.map((e) => {
+            const w = e.work || {}; const st = taskStats(e); const m = minutesWorked(e);
+            return `<tr><td>${esc(fmtDay(e.date))}</td><td>${esc(dayTypeLabel(e.dayType) || '')}</td><td>${esc(fmtTime(w.start))}</td><td>${esc(fmtTime(w.end))}</td>
+              <td>${w.start && Number(w.breakMin) ? fmtDur(Number(w.breakMin)) : ''}</td><td>${m === null ? '' : fmtDur(m)}</td>
+              <td>${m !== null && (expectedMin(e) || m) ? fmtSigned(overMin(e)) : ''}</td><td>${st.total ? `${st.done}/${st.total}` : ''}</td></tr>`;
+          }).join('')}</tbody>
+          <tfoot><tr><th colspan="5">Total</th><th>${fmtDur(totalMin)}</th><th>${fmtSigned(balance(from, to))}</th><th>${done}/${set}</th></tr></tfoot></table>
+        ${blockers.length ? `<h2>Blockers</h2><ul class="plain">${blockers.map((e) => `<li><b>${esc(fmtDay(e.date))}:</b> ${esc(e.blockers.trim())}</li>`).join('')}</ul>` : ''}
+        ${pinned.length ? `<h2>Pinned days</h2><ul class="plain">${pinned.map((e) => `<li><b>${esc(fmtDay(e.date))}:</b> ${esc((e.done || '').trim().split('\n')[0] || 'No notes')}</li>`).join('')}</ul>` : ''}
+        ${!days.length ? '<p>No entries in this month.</p>' : ''}
+      </div>`;
+    window.print();
   }
 
   function exportPrint() {
@@ -1772,9 +2234,19 @@
     'open-day'(el) { state.historyDay = el.dataset.day || null; state.exportOpen = false; render(); window.scrollTo(0, 0); },
     reload() { loadShared(); },
     'hist-view'(el) { state.histView = el.dataset.view; render(); },
+    'hist-filter'(el) { state.histFilter = el.dataset.filter; render(); },
     'cal-month'(el) { state.calMonth = el.dataset.month; render(); },
     'cal-color'(el) { state.calColor = el.dataset.by; render(); },
     'trend-range'(el) { state.trendRange = Number(el.dataset.range); render(); },
+    'heat-by'(el) { state.heatBy = el.dataset.by; render(); },
+    'heat-year'(el) { state.heatYear = Number(el.dataset.year); render(); },
+    'open-heat'(el) { state.tab = 'history'; state.historyDay = el.dataset.day; render(); window.scrollTo(0, 0); },
+    'report-print'() { reportPrint(currentReportMonth()); },
+    'report-csv'() {
+      const mo = currentReportMonth();
+      const [y, m] = mo.split('-').map(Number);
+      timesheetCsv(`${mo}-01`, toKey(new Date(y, m, 0)));
+    },
 
     // export
     'export-open'(el) {
@@ -1786,6 +2258,7 @@
     'export-close'() { state.exportOpen = false; render(); },
     'export-preset'(el) { state.exportRange = { from: el.dataset.from, to: el.dataset.to }; render(); },
     'export-txt'() { exportText(); },
+    'export-csv'() { const r = state.exportRange; timesheetCsv(r.from, r.to); },
     'export-pdf'() { exportPrint(); },
 
     // morning check-in
@@ -1806,6 +2279,11 @@
       const t = [...c.planned, ...c.carry].find((x) => x.key === el.dataset.key);
       if (t) state.checkin.prio[t.key] = !t.priority;
       render();
+    },
+    'checkin-inbox'(el) {
+      const on = new Set(state.checkin.inboxOn || []);
+      if (el.checked) on.add(el.dataset.id); else on.delete(el.dataset.id);
+      state.checkin.inboxOn = [...on];
     },
     'checkin-carry'(el) {
       const off = state.checkin.carryOff;
@@ -1832,6 +2310,13 @@
           id: uid(), text: t.text, done: false, priority: !!t.priority, carried: true, carriedCount: t.carriedCount,
         })),
       ]);
+      const meta = getMeta();
+      const pick = meta.inbox.filter((t) => (state.checkin.inboxOn || []).includes(t.id));
+      if (pick.length) {
+        entry.tasks = [...entry.tasks, ...pick.map((t) => ({ id: uid(), text: t.text, done: false, carried: false }))];
+        meta.inbox = meta.inbox.filter((t) => !pick.includes(t));
+        saveMeta(meta);
+      }
       entry.checkedInAt = Date.now();
       entry.work = { ...blankEntry(today).work, ...(entry.work || {}) };
       if (!isTime(entry.work.start)) entry.work.start = nowHHMM();
@@ -2040,6 +2525,92 @@
       saveEntry(e); flushNow(); render();
     },
     'edit-close'() { state.editingClose = true; render(); },
+
+    // inbox
+    'inbox-add'() {
+      const text = takeInput('inbox-add');
+      if (text) { const m = getMeta(); m.inbox = [...m.inbox, { id: uid(), text, added: todayKey() }]; saveMeta(m); }
+      render();
+    },
+    'inbox-today'(el) {
+      const m = getMeta();
+      const t = m.inbox.find((x) => x.id === el.dataset.id);
+      if (!t) return;
+      const e = todayEntry();
+      e.tasks.push({ id: uid(), text: t.text, done: false, carried: false });
+      m.inbox = m.inbox.filter((x) => x.id !== t.id);
+      saveEntry(e); saveMeta(m); render();
+    },
+    'inbox-remove'(el) {
+      const m = getMeta();
+      m.inbox = m.inbox.filter((x) => x.id !== el.dataset.id);
+      saveMeta(m); render();
+    },
+
+    // waiting on
+    'waiting-add'() {
+      const whatEl = $app.querySelector('[data-focus="waiting-what"]');
+      const whoEl = $app.querySelector('[data-focus="waiting-who"]');
+      const text = whatEl ? whatEl.value.trim() : '';
+      const who = whoEl ? whoEl.value.trim() : '';
+      state.focus = 'waiting-what';
+      if (text) { const m = getMeta(); m.waiting = [...m.waiting, { id: uid(), what: text, who, since: todayKey(), done: false }]; saveMeta(m); }
+      render();
+    },
+    'waiting-done'(el) {
+      const m = getMeta();
+      m.waiting = m.waiting.map((w) => (w.id === el.dataset.id ? { ...w, done: true, doneOn: todayKey() } : w));
+      saveMeta(m); render();
+    },
+    'waiting-remove'(el) {
+      const m = getMeta();
+      m.waiting = m.waiting.filter((w) => w.id !== el.dataset.id);
+      saveMeta(m); render();
+    },
+
+    // work log
+    'log-add'() {
+      const text = takeInput('log-add');
+      if (text) { const e = todayEntry(); e.log = [...(e.log || []), { id: uid(), at: nowHHMM(), text }]; saveEntry(e); }
+      render();
+    },
+    'log-remove'(el) {
+      const e = todayEntry();
+      e.log = (e.log || []).filter((l) => l.id !== el.dataset.id);
+      saveEntry(e); render();
+    },
+
+    // pin a day
+    'pin-day'(el) {
+      const day = el.dataset.day;
+      const e = day === todayKey() ? todayEntry() : state.entries[day];
+      if (!e) return;
+      e.pinned = !e.pinned;
+      saveEntry(e); render();
+    },
+
+    // mark an empty calendar day as leave / sick / holiday
+    'cal-pick'(el) { state.calPick = state.calPick === el.dataset.day ? null : el.dataset.day; render(); },
+    'mark-day'(el) {
+      const day = state.calPick;
+      if (!day) return;
+      const e = state.entries[day] || blankEntry(day);
+      e.dayType = el.dataset.type;
+      state.calPick = null;
+      if (!e.dayType && isMarkerOnlyBlank(e)) { removeEntry(day); render(); return; }
+      saveEntry(e); render();
+    },
+
+    // settings: working hours
+    'save-target'() {
+      const hrs = Number((document.getElementById('set-target') || {}).value);
+      const days = [...$app.querySelectorAll('[data-workday]')].filter((c) => c.checked).map((c) => Number(c.dataset.workday));
+      if (!(hrs >= 0 && hrs <= 24)) return setMessage('Enter target hours between 0 and 24.');
+      const m = getMeta();
+      m.settings = { ...m.settings, targetMin: Math.round(hrs * 60), workdays: days };
+      saveMeta(m);
+      setMessage('Working hours saved.');
+    },
     'work-now'(el) {
       const e = todayEntry();
       e.work = { ...blankEntry(e.date).work, ...(e.work || {}), [el.dataset.which]: nowHHMM() };
@@ -2106,6 +2677,13 @@
     const el = ev.target;
     if (el.type === 'checkbox' && el.dataset.action && actions[el.dataset.action]) actions[el.dataset.action](el);
     if (el.id === 'import-file' && el.files[0]) importBackup(el.files[0]);
+    if (el.dataset && el.dataset.daytype && !READONLY) {
+      const day = el.dataset.daytype;
+      const e = day === todayKey() ? todayEntry() : (state.entries[day] || blankEntry(day));
+      e.dayType = el.value;
+      saveEntry(e); render();
+    }
+    if (el.id === 'report-month' && /^\d{4}-\d{2}$/.test(el.value)) { state.reportMonth = el.value; }
     if (el.id === 'ex-from' || el.id === 'ex-to') {
       const from = document.getElementById('ex-from').value;
       const to = document.getElementById('ex-to').value;
@@ -2133,6 +2711,9 @@
       saveEntry(e);
       const t = document.getElementById('work-total');
       if (t) t.innerHTML = workTotalText(e, minutesSoFar(e));
+      const tg = document.getElementById('work-target');
+      if (tg) tg.innerHTML = targetText(e);
+      updateTitle();
     } else if ('search' in el.dataset) {
       state.search = el.value;
       document.getElementById('history-list').innerHTML = historyListHtml();
@@ -2246,6 +2827,15 @@
     if (/^[1-9]$/.test(ev.key) && tabs[Number(ev.key) - 1]) {
       ev.preventDefault(); go(tabs[Number(ev.key) - 1]); return;
     }
+    if ((ev.key === 'i' || ev.key === 'I' || ev.key === 'l' || ev.key === 'L') && !READONLY) {
+      const today = state.entries[todayKey()];
+      if (!today || !today.checkedInAt) return;
+      ev.preventDefault();
+      if (state.tab !== 'today') go('today');
+      const input = $app.querySelector(`[data-focus="${ev.key.toLowerCase() === 'i' ? 'inbox-add' : 'log-add'}"]`);
+      if (input) { input.focus(); input.scrollIntoView({ block: 'center' }); }
+      return;
+    }
     if ((ev.key === 'n' || ev.key === 'N') && !READONLY) {
       ev.preventDefault();
       if (state.tab !== 'today') go('today');
@@ -2274,7 +2864,15 @@
 
   setInterval(() => {
     const t = document.getElementById('work-total');
-    if (t && state.tab === 'today') { const e = state.entries[todayKey()]; if (e) t.innerHTML = workTotalText(e, minutesSoFar(e)); }
+    if (t && state.tab === 'today') {
+      const e = state.entries[todayKey()];
+      if (e) {
+        t.innerHTML = workTotalText(e, minutesSoFar(e));
+        const tg = document.getElementById('work-target');
+        if (tg) tg.innerHTML = targetText(e);
+      }
+    }
+    updateTitle();
   }, 30 * 1000);
 
   if (READONLY) {

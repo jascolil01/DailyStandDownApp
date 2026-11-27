@@ -5,13 +5,22 @@ A small web app for handing your day over to tomorrow-you.
 - **Morning check-in**: a recap of your last entry, the tasks you set for today (must-do tasks first), any tasks you'd set for this date, and a choice of which unfinished tasks to carry over. The first check-in of each week adds a look back at last week.
 - **During the day**: tick tasks off; star must-do tasks; edit, reorder (drag the ⠿ handle or use the ⋯ menu), delete, or move a task to a later date. Tasks that keep getting carried over (3+ days) are flagged with "Do it today", "Move to later" or "Drop it".
 - **Work hours**: log when you started and finished and how long your breaks were (Start my day fills in the start time and standing down fills in the finish time; both can be changed). Today shows hours worked so far; History, exports, Trends and the weekly summaries show hours per day and per week.
+- **Target hours and overtime**: set your normal day and working weekdays in Settings. Today shows time to go or over, and Trends keeps a weekly, monthly and yearly overtime balance.
+- **Day types**: mark a day as Office, Remote, Leave, Sick or Public holiday (on Today, on any day in History, or by clicking an empty day in the calendar). Leave days expect no hours.
+- **Inbox**: jot tasks down without picking a day; move them to today, or tick them at the next morning's check-in.
+- **Waiting on**: track what you're waiting for and from whom; the check-in reminds you until you mark it received.
+- **Work log**: timestamped notes during the day, searchable in History and included in exports.
+- **Pinned days**: pin a day and filter History to pinned days.
+- **Reports**: a monthly report to print or save as PDF, and a timesheet CSV (any month from Trends, or any range from Export) for Excel.
+- **Year at a glance**: a heatmap of the year by hours or tasks done.
+- The browser tab shows tasks left and hours so far.
 - **Coming up**: tasks set for a specific date, which appear in that day's check-in.
 - **Evening stand-down**: what you got done (one tap copies in your ticked tasks), blockers, a mood/energy rating, and tomorrow's tasks (one tap brings today's unfinished ones along).
 - **History**: every day as a searchable list or a month calendar coloured by mood or tasks done. Export any day or date range as a text file or a printable page (save as PDF from the print dialog).
 - **Trends**: mood and tasks over 30 or 90 days, with this week and last week summarised.
 - **Read-only link**: other devices and people can read your entries but cannot change them, and you can hide mood or blockers from it.
 - **Works offline** after the first visit; changes sync when you're back online.
-- **Desktop layout** on wide screens: a sidebar, side-by-side columns (tasks next to the stand-down), History as a list with the selected day alongside, and keyboard shortcuts: `1`–`4` switch sections, `N` adds a task, `/` searches History, `←`/`→` step between days. Phones and narrow windows get the single-column layout.
+- **Desktop layout** on wide screens: a sidebar, side-by-side columns (tasks next to the stand-down), History as a list with the selected day alongside, and keyboard shortcuts: `1`–`4` switch sections, `N` adds a task, `I` adds to the inbox, `L` adds to the work log, `/` searches History, `←`/`→` step between days. Phones and narrow windows get the single-column layout.
 
 The day rolls over at 4am, so a stand-down written after midnight still belongs to the day you just had. If you skip days (a weekend, say), the morning recap shows your most recent entry.
 
